@@ -10,7 +10,7 @@
 # Examples:
 #   notify-discord.sh success "Task done" "p42 completed in 180s"
 #   notify-discord.sh error "Daemon crashed" "qwen-coder exit 1"
-#   tail -50 ~/.claude/logs/scrape.log | notify-discord.sh scrape "Scrape report"
+#   tail -50 ~/.surrogate/logs/scrape.log | notify-discord.sh scrape "Scrape report"
 set -u
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 

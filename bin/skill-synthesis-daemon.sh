@@ -9,7 +9,7 @@ set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
 SKILLS_DIR="$HOME/.surrogate/skills"
-LOG="$HOME/.claude/logs/skill-synthesis.log"
+LOG="$HOME/.surrogate/logs/skill-synthesis.log"
 PAIRS="$HOME/.surrogate/training-pairs.jsonl"
 mkdir -p "$SKILLS_DIR" "$(dirname "$LOG")"
 

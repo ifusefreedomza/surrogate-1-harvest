@@ -10,7 +10,7 @@ Triggers (responds when):
 Pipes user message → surrogate -p "..." → replies with output.
 
 Token comes from $DISCORD_BOT_TOKEN (read from ~/.hermes/.env).
-Logs to ~/.claude/logs/hermes-discord-bot.log.
+Logs to ~/.surrogate/logs/hermes-discord-bot.log.
 """
 from __future__ import annotations
 
@@ -26,12 +26,12 @@ import discord
 
 # ── Config ───────────────────────────────────────────────────────────────────
 HOME = Path.home()
-LOG_PATH = HOME / ".claude/logs/hermes-discord-bot.log"
+LOG_PATH = HOME / ".surrogate/logs/hermes-discord-bot.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# surrogate CLI path: prefer ~/.local/bin (installed), fallback ~/.claude/bin
+# surrogate CLI path: prefer ~/.local/bin (installed), fallback ~/.surrogate/bin
 SURROGATE_BIN = next(
-    p for p in [HOME / ".local/bin/surrogate", HOME / ".claude/bin/surrogate"] if p.exists()
+    p for p in [HOME / ".local/bin/surrogate", HOME / ".surrogate/bin/surrogate"] if p.exists()
 )
 
 PREFIX_RE = re.compile(r"^[!/]sg\b\s*", re.IGNORECASE)
@@ -169,7 +169,7 @@ async def on_ready() -> None:
     log.info("connected as %s (id=%s)", client.user, client.user.id if client.user else "?")
     print(f"✅ logged in as {client.user}")
     # Notify Discord channel via webhook that bot came online
-    notify = HOME / ".claude/bin/notify-discord.sh"
+    notify = HOME / ".surrogate/bin/notify-discord.sh"
     if notify.exists():
         subprocess.Popen(
             [str(notify), "success", "Discord bot online", f"Connected as {client.user}. DM or @mention to chat."],

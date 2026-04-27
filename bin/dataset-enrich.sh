@@ -17,13 +17,13 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/dataset-enrich.log"
+LOG="$HOME/.surrogate/logs/dataset-enrich.log"
 WORK="$HOME/.hermes/workspace/dataset-enrich"
 mkdir -p "$WORK" "$(dirname "$LOG")"
 
 echo "[$(date +%H:%M:%S)] dataset enrich start" | tee "$LOG"
 
-~/.claude/venv/bin/python <<'PYEOF' 2>&1 | tee -a "$LOG"
+~/.surrogate/venv/bin/python <<'PYEOF' 2>&1 | tee -a "$LOG"
 from huggingface_hub import HfApi
 from pathlib import Path
 from datasets import load_dataset

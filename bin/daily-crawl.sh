@@ -14,17 +14,17 @@ while [ $# -gt 0 ]; do
 done
 
 export PATH=/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:$PATH
-source ~/.claude/.env 2>/dev/null || true
+source ~/.hermes/.env 2>/dev/null || true
 # Also source ~/.hermes/.env (where Surrogate keeps the live tokens)
 set -a; source ~/.hermes/.env 2>/dev/null || true; set +a
 
 DATE=$(date +%Y-%m-%d)
 CRAWL_DIR="$HOME/Documents/Obsidian Vault/AI-Hub/crawls/$DATE"
-mkdir -p "$CRAWL_DIR/raw" "$HOME/.claude/logs"
-LOG="$HOME/.claude/logs/crawl-$DATE.log"
+mkdir -p "$CRAWL_DIR/raw" "$HOME/.surrogate/logs"
+LOG="$HOME/.surrogate/logs/crawl-$DATE.log"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
-PY=~/.claude/venv/bin/python
+PY=~/.surrogate/venv/bin/python
 
 # ═══════════ SOURCES — use Python scripts with explicit env passing ═══════════
 
@@ -403,6 +403,6 @@ for d in dirs[:60]:
 PY
 
 # Graph sync (async)
-[ -x "$HOME/.claude/bin/graph-sync.sh" ] && ("$HOME/.claude/bin/graph-sync.sh" > /dev/null 2>&1 &) || true
+[ -x "$HOME/.surrogate/bin/graph-sync.sh" ] && ("$HOME/.surrogate/bin/graph-sync.sh" > /dev/null 2>&1 &) || true
 
 log "=== Done: $CRAWL_DIR/digest.md ==="

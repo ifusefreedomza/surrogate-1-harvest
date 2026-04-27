@@ -4,7 +4,7 @@
 set -u
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/hermes-daily-summary.log"
+LOG="$HOME/.surrogate/logs/hermes-daily-summary.log"
 mkdir -p "$(dirname "$LOG")"
 
 # ── Collect metrics ──────────────────────────────────────────────────────────
@@ -12,23 +12,23 @@ TODAY=$(date +%Y-%m-%d)
 YESTERDAY=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d 'yesterday' +%Y-%m-%d)
 
 # 1. Tasks completed (24h)
-TASKS_DONE=$(grep -c "done in" ~/.claude/logs/hermes-dev-*-daemon.log 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+TASKS_DONE=$(grep -c "done in" ~/.surrogate/logs/hermes-dev-*-daemon.log 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
 
 # 2. Tasks failed (24h)
-TASKS_FAIL=$(grep -c "failed after" ~/.claude/logs/hermes-dev-*-daemon.log 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+TASKS_FAIL=$(grep -c "failed after" ~/.surrogate/logs/hermes-dev-*-daemon.log 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
 
 # 3. Scrape activity
-SCRAPE_TOTAL=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null || echo "?")
-SCRAPE_24H=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped WHERE scraped_at > datetime('now','-24 hours')" 2>/dev/null || echo "?")
+SCRAPE_TOTAL=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null || echo "?")
+SCRAPE_24H=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped WHERE scraped_at > datetime('now','-24 hours')" 2>/dev/null || echo "?")
 
 # 4. Training pairs
 PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}' || echo "?")
 
 # 5. Index docs
-DOCS=$(sqlite3 ~/.claude/index.db "SELECT COUNT(*) FROM docs" 2>/dev/null || echo "?")
+DOCS=$(sqlite3 ~/.surrogate/index.db "SELECT COUNT(*) FROM docs" 2>/dev/null || echo "?")
 
 # 6. Episodes (surrogate memory)
-EPISODES=$(wc -l ~/.claude/state/surrogate-memory/episodes.jsonl 2>/dev/null | awk '{print $1}' || echo 0)
+EPISODES=$(wc -l ~/.surrogate/state/surrogate-memory/episodes.jsonl 2>/dev/null | awk '{print $1}' || echo 0)
 
 # 7. Daemons running
 DAEMONS_UP=$(pgrep -f "dev-cloud-daemon\|qwen-coder-daemon\|priority-json-watcher\|hermes" 2>/dev/null | wc -l | tr -d ' ')
@@ -41,7 +41,7 @@ for q in cerebras groq github samba nvidia cloudflare qwen-local; do
 done
 
 # 9. Recent errors (last 100 log lines)
-ERR_COUNT=$(tail -200 ~/.claude/logs/*.log 2>/dev/null | grep -cE "ERROR|CRITICAL|Fatal|429|500" 2>/dev/null || echo 0)
+ERR_COUNT=$(tail -200 ~/.surrogate/logs/*.log 2>/dev/null | grep -cE "ERROR|CRITICAL|Fatal|429|500" 2>/dev/null || echo 0)
 
 # ── Build digest body ────────────────────────────────────────────────────────
 BODY="$(cat <<EOF
@@ -62,4 +62,4 @@ LEVEL="info"
 
 echo "[$(date '+%H:%M:%S')] sending daily summary (${LEVEL}): done=$TASKS_DONE fail=$TASKS_FAIL scrape=$SCRAPE_24H" >> "$LOG"
 
-"$HOME/.claude/bin/notify-discord.sh" "$LEVEL" "Hermes daily summary · $TODAY" "$BODY"
+"$HOME/.surrogate/bin/notify-discord.sh" "$LEVEL" "Hermes daily summary · $TODAY" "$BODY"

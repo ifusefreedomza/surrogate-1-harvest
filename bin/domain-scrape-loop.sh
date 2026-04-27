@@ -8,10 +8,10 @@
 set -u
 DUR="${1:-900}"
 PARALLEL="${2:-3}"
-LOG="$HOME/.claude/logs/domain-scrape-loop.log"
+LOG="$HOME/.surrogate/logs/domain-scrape-loop.log"
 START=$(date +%s)
 BEFORE_PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}')
-BEFORE_LEDGER=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
+BEFORE_LEDGER=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
 
 echo "═══ LOOP START $(date +%H:%M:%S) duration=${DUR}s parallel=$PARALLEL" | tee -a "$LOG"
 echo "   before: pairs=$BEFORE_PAIRS ledger_repos=$BEFORE_LEDGER" | tee -a "$LOG"
@@ -33,7 +33,7 @@ while true; do
     # Fire N parallel instances, each picks different domain via ledger
     for i in $(seq 1 $PARALLEL); do
         (
-            ~/.claude/bin/github-domain-scrape.sh >> "$LOG" 2>&1
+            ~/.surrogate/bin/github-domain-scrape.sh >> "$LOG" 2>&1
         ) &
     done
     wait  # wait all parallel to finish (30-60s typical)
@@ -44,13 +44,13 @@ while true; do
     # Progress every 5 iters
     if (( ITER % 5 == 0 )); then
         PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}')
-        LEDGER=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
+        LEDGER=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
         echo "  [iter=$ITER $((NOW - START))s] pairs=$PAIRS (+$((PAIRS - BEFORE_PAIRS))) ledger=$LEDGER (+$((LEDGER - BEFORE_LEDGER)))" | tee -a "$LOG"
     fi
 done
 
 AFTER_PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}')
-AFTER_LEDGER=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
+AFTER_LEDGER=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
 echo "═══ LOOP DONE $(date +%H:%M:%S)" | tee -a "$LOG"
 echo "   iters: $ITER" | tee -a "$LOG"
 echo "   pairs added:  $((AFTER_PAIRS - BEFORE_PAIRS))" | tee -a "$LOG"

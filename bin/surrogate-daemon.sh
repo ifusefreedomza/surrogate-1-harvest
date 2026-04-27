@@ -2,7 +2,7 @@
 # Surrogate Daemon — continuous autonomous worker
 #
 # Architecture:
-#   - Task queue file:     ~/.claude/state/surrogate-queue.jsonl (append-only)
+#   - Task queue file:     ~/.surrogate/state/surrogate-queue.jsonl (append-only)
 #   - Workers:             N parallel (default 3)
 #   - Pickup:              instant (as soon as worker idle → pull next task)
 #   - Self-generation:     if queue empty, daemon asks itself "what should I work on?"
@@ -18,11 +18,11 @@
 set -u
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-STATE="$HOME/.claude/state/surrogate-daemon"
+STATE="$HOME/.surrogate/state/surrogate-daemon"
 QUEUE="$STATE/queue.jsonl"
 DONE="$STATE/done.jsonl"
 PID_FILE="$STATE/daemon.pid"
-LOG="$HOME/.claude/logs/surrogate-daemon.log"
+LOG="$HOME/.surrogate/logs/surrogate-daemon.log"
 WORKERS=1          # default 1 worker (budget-safe). User can --workers 3 for burst
 mkdir -p "$STATE" "$(dirname "$LOG")"
 
@@ -150,7 +150,7 @@ PYEOF
             # Every 30min: consolidation
             NOW_MIN=$(date +%M)
             if [[ "$NOW_MIN" == "15" ]] || [[ "$NOW_MIN" == "45" ]]; then
-                "$HOME/.claude/bin/surrogate-consolidate.sh" >> "$LOG" 2>&1 &
+                "$HOME/.surrogate/bin/surrogate-consolidate.sh" >> "$LOG" 2>&1 &
             fi
 
             sleep 10
@@ -226,7 +226,7 @@ PYEOF
             AUTO_TASK=$(/usr/bin/python3 <<'PYEOF'
 import json, os, random
 from pathlib import Path
-ep = Path(os.path.expanduser('~/.claude/state/surrogate-memory/episodes.jsonl'))
+ep = Path(os.path.expanduser('~/.surrogate/state/surrogate-memory/episodes.jsonl'))
 recent_topics = []
 if ep.exists():
     for line in ep.read_text().splitlines()[-30:]:
@@ -243,7 +243,7 @@ pool = [
     # B. Codebase health
     "อ่าน ~/axentx/ หา TODO/FIXME across projects → สร้าง fix spec",
     "เช็ค axentx test coverage per project → identify weakest → propose tests",
-    "Scan ~/.claude/bin/ หา script ที่ไม่ถูกใช้ > 7 days → propose archive",
+    "Scan ~/.surrogate/bin/ หา script ที่ไม่ถูกใช้ > 7 days → propose archive",
     "Review last 10 auto-commits → ตรวจว่า quality OK หรือไม่",
     # C. Knowledge quality
     "สำรวจ index.db หา duplicate entries → propose dedup",
@@ -305,7 +305,7 @@ PYEOF
         START=$(date +%s)
 
         # Execute via agent
-        OUTPUT=$("$HOME/.claude/bin/surrogate-agent.sh" --max-steps 6 "$TASK" 2>&1 | tail -50)
+        OUTPUT=$("$HOME/.surrogate/bin/surrogate-agent.sh" --max-steps 6 "$TASK" 2>&1 | tail -50)
         END=$(date +%s)
         DUR=$((END - START))
 

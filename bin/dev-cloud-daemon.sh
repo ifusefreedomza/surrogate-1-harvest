@@ -8,7 +8,7 @@ set -u
 
 PROVIDER="${1:?usage: dev-cloud-daemon.sh <github|samba|cloudflare|groq|gemini>}"
 
-LOG="$HOME/.claude/logs/dev-cloud-daemon-${PROVIDER}.log"
+LOG="$HOME/.surrogate/logs/dev-cloud-daemon-${PROVIDER}.log"
 mkdir -p "$(dirname "$LOG")"
 
 # Redis connection: prefer Unix socket, fall back to TCP 127.0.0.1:6379.
@@ -65,15 +65,15 @@ except: print('OK')" 2>/dev/null)
     # and works on exactly what the daemon locked (avoids "no free priority"
     # dead-ends when the file lock was touched earlier for this same PRIO_ID).
     HERMES_PRIO_ID="$PRIO_ID" \
-        "$HOME/.claude/bin/dev-cloud-worker.sh" "$PROVIDER" 2>&1 | tail -3 >> "$LOG"
+        "$HOME/.surrogate/bin/dev-cloud-worker.sh" "$PROVIDER" 2>&1 | tail -3 >> "$LOG"
     RC=${PIPESTATUS[0]}
     DUR=$(( $(date +%s) - START ))
     echo "[$(date '+%H:%M:%S')] $PROVIDER $PRIO_ID done in ${DUR}s (rc=$RC)" >> "$LOG"
 
     # Discord: only notify failures + slow tasks (avoid spam on every success)
     if [[ $RC -ne 0 ]]; then
-        "$HOME/.claude/bin/notify-discord.sh" error "Worker failed" "$PROVIDER · $PRIO_ID · ${DUR}s · rc=$RC" 2>/dev/null &
+        "$HOME/.surrogate/bin/notify-discord.sh" error "Worker failed" "$PROVIDER · $PRIO_ID · ${DUR}s · rc=$RC" 2>/dev/null &
     elif [[ $DUR -gt 240 ]]; then
-        "$HOME/.claude/bin/notify-discord.sh" warn "Slow task" "$PROVIDER · $PRIO_ID · ${DUR}s" 2>/dev/null &
+        "$HOME/.surrogate/bin/notify-discord.sh" warn "Slow task" "$PROVIDER · $PRIO_ID · ${DUR}s" 2>/dev/null &
     fi
 done

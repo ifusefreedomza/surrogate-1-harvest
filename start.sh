@@ -3,7 +3,7 @@
 # Boots: persistent /data mount → Redis → Ollama → axentx repos → daemons → status server.
 set -uo pipefail
 
-LOG_DIR="${HOME}/.claude/logs"
+LOG_DIR="${HOME}/.surrogate/logs"
 mkdir -p "$LOG_DIR"
 echo "[$(date +%H:%M:%S)] hermes-hf-space boot start"
 echo "[$(date +%H:%M:%S)] hermes-hf-space boot start" >> "$LOG_DIR/boot.log"
@@ -15,25 +15,44 @@ set -x
 # Echo stdout so HF run-logs see progress (safe steps before .env is loaded)
 exec > >(tee -a "$LOG_DIR/boot.log") 2>&1
 
-# ── 1. Persistent data — symlink state dirs to /data (HF persistent mount) ──
+# ── 1. Persistent data — symlink state subdirs to /data (HF persistent mount) ──
+# bin/ is NOT persisted (baked into image, refreshed on every push).
+# Persisted: state (DBs), logs, memory, skills, sessions, training pairs,
+#            workspace (hermes runtime), projects (axentx clones), ollama (model cache).
 DATA="/data"
 if [[ -d "$DATA" ]] && [[ -w "$DATA" ]]; then
-    mkdir -p "$DATA"/{state,workspace,memory,reflexion,projects,ollama,surrogate,index}
-    # Symlink critical paths so DB/training/ChromaDB persist across rebuilds
-    for src in \
-        "${HOME}/.claude/state:${DATA}/state" \
+    mkdir -p "$DATA"/{state,logs,memory,skills,sessions,workspace,projects,ollama,training,reflexion,index}
+    # Migrate from any older layout (one-time): if /data/surrogate/state exists, move up one level
+    if [[ -d "$DATA/surrogate/state" ]] && [[ ! -L "$DATA/state" ]]; then
+        mv "$DATA/surrogate"/* "$DATA/" 2>/dev/null || true
+        rmdir "$DATA/surrogate" 2>/dev/null || true
+    fi
+
+    for spec in \
+        "${HOME}/.surrogate/state:${DATA}/state" \
+        "${HOME}/.surrogate/logs:${DATA}/logs" \
+        "${HOME}/.surrogate/memory:${DATA}/memory" \
+        "${HOME}/.surrogate/skills:${DATA}/skills" \
+        "${HOME}/.surrogate/sessions:${DATA}/sessions" \
         "${HOME}/.hermes/workspace:${DATA}/workspace" \
-        "${HOME}/.surrogate:${DATA}/surrogate" \
         "${HOME}/.ollama:${DATA}/ollama"; do
-        target="${src%%:*}"
-        link="${src##*:}"
+        target="${spec%%:*}"
+        link="${spec##*:}"
         mkdir -p "$(dirname "$target")"
         if [[ ! -L "$target" ]]; then
             rm -rf "$target" 2>/dev/null
             ln -sfn "$link" "$target"
         fi
     done
-    echo "[$(date +%H:%M:%S)] persistent /data linked" >> "$LOG_DIR/boot.log"
+
+    # training-pairs.jsonl — single file persistence
+    if [[ ! -L "${HOME}/.surrogate/training-pairs.jsonl" ]]; then
+        rm -f "${HOME}/.surrogate/training-pairs.jsonl" 2>/dev/null
+        touch "${DATA}/training-pairs.jsonl"
+        ln -sfn "${DATA}/training-pairs.jsonl" "${HOME}/.surrogate/training-pairs.jsonl"
+    fi
+
+    echo "[$(date +%H:%M:%S)] persistent /data linked (state, logs, memory, skills, sessions, workspace, ollama, training-pairs)" >> "$LOG_DIR/boot.log"
 else
     echo "[$(date +%H:%M:%S)] WARN: /data not writable — running ephemeral!" >> "$LOG_DIR/boot.log"
 fi
@@ -140,7 +159,7 @@ fi
 # Trace stays OFF — never re-enable past secrets section.
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
     set -a; source ~/.hermes/.env 2>/dev/null; set +a
-    nohup python ~/.claude/bin/hermes-discord-bot.py >> "$LOG_DIR/discord-bot.log" 2>&1 &
+    nohup python ~/.surrogate/bin/hermes-discord-bot.py >> "$LOG_DIR/discord-bot.log" 2>&1 &
     echo "[$(date +%H:%M:%S)] discord bot started"
 fi
 
@@ -149,11 +168,11 @@ cat > /tmp/scrape-daemon.sh <<'SCRAPESH'
 #!/bin/bash
 # 8 concurrent scrape workers, near-zero idle time.
 set -a; source ~/.hermes/.env 2>/dev/null; set +a
-LOG="${HOME}/.claude/logs/scrape-continuous.log"
+LOG="${HOME}/.surrogate/logs/scrape-continuous.log"
 mkdir -p "$(dirname "$LOG")"
 while true; do
     START=$(date +%s)
-    bash ~/.claude/bin/domain-scrape-loop.sh 1500 8 >> "$LOG" 2>&1
+    bash ~/.surrogate/bin/domain-scrape-loop.sh 1500 8 >> "$LOG" 2>&1
     DUR=$(( $(date +%s) - START ))
     # Tight cool-downs — cloud has unlimited bandwidth, only rate-limit concern
     if [[ $DUR -lt 30 ]]; then sleep 30          # queue likely exhausted, give it time
@@ -167,37 +186,37 @@ nohup /tmp/scrape-daemon.sh > "$LOG_DIR/scrape-daemon.log" 2>&1 &
 echo "[$(date +%H:%M:%S)] continuous scrape daemon (parallel=8) started" >> "$LOG_DIR/boot.log"
 
 # ── 7b. Agentic crawler (URL frontier + visited stamps + link discovery) ────
-nohup bash ~/.claude/bin/agentic-crawler.sh 6 > "$LOG_DIR/agentic-crawler.log" 2>&1 &
+nohup bash ~/.surrogate/bin/agentic-crawler.sh 6 > "$LOG_DIR/agentic-crawler.log" 2>&1 &
 echo "[$(date +%H:%M:%S)] agentic crawler started (parallel=6)" >> "$LOG_DIR/boot.log"
 
 # ── 7c. Skill-synthesis daemon (extract patterns from cloned repos → skills) ─
-nohup bash ~/.claude/bin/skill-synthesis-daemon.sh > "$LOG_DIR/skill-synthesis.log" 2>&1 &
+nohup bash ~/.surrogate/bin/skill-synthesis-daemon.sh > "$LOG_DIR/skill-synthesis.log" 2>&1 &
 echo "[$(date +%H:%M:%S)] skill-synthesis daemon started" >> "$LOG_DIR/boot.log"
 
 # ── 7b. Cron loop — non-scrape daemons (scrape now runs continuously above) ─
 cat > /tmp/hermes-cron.sh <<'CRONSH'
 #!/bin/bash
 set -a; source ~/.hermes/.env 2>/dev/null; set +a
-LOG="${HOME}/.claude/logs/cron.log"
+LOG="${HOME}/.surrogate/logs/cron.log"
 mkdir -p "$(dirname "$LOG")"
 while true; do
     M=$(($(date +%s) / 60))
     # Every 2 min: continuous local dev (qwen3-coder when ready, else gemma)
-    [[ $((M % 2)) -eq 0 ]] && bash ~/.claude/bin/surrogate-dev-loop.sh 1 >> "$LOG" 2>&1 &
+    [[ $((M % 2)) -eq 0 ]] && bash ~/.surrogate/bin/surrogate-dev-loop.sh 1 >> "$LOG" 2>&1 &
     # Every 5 min: producer pushes priorities to Redis
-    [[ $((M % 5)) -eq 0 ]] && bash ~/.claude/bin/work-queue-producer.sh >> "$LOG" 2>&1 &
+    [[ $((M % 5)) -eq 0 ]] && bash ~/.surrogate/bin/work-queue-producer.sh >> "$LOG" 2>&1 &
     # Every 3 min: training-pair push to HF (drains ~/.surrogate/training-pairs.jsonl)
-    [[ $((M % 3)) -eq 0 ]] && bash ~/.claude/bin/push-training-to-hf.sh >> "$LOG" 2>&1 &
+    [[ $((M % 3)) -eq 0 ]] && bash ~/.surrogate/bin/push-training-to-hf.sh >> "$LOG" 2>&1 &
     # Every 20 min: full orchestrate chain (architect → dev → qa → reviewer + git push)
-    [[ $((M % 20)) -eq 0 ]] && bash ~/.claude/bin/auto-orchestrate-loop.sh >> "$LOG" 2>&1 &
+    [[ $((M % 20)) -eq 0 ]] && bash ~/.surrogate/bin/auto-orchestrate-loop.sh >> "$LOG" 2>&1 &
     # Every 30 min: research-apply (pop queue → orchestrate → ship feature)
-    [[ $((M % 30)) -eq 15 ]] && bash ~/.claude/bin/surrogate-research-apply.sh >> "$LOG" 2>&1 &
+    [[ $((M % 30)) -eq 15 ]] && bash ~/.surrogate/bin/surrogate-research-apply.sh >> "$LOG" 2>&1 &
     # Every 60 min: keyword tuner (adapts scrape queue based on yields)
-    [[ $((M % 60)) -eq 0 ]] && bash ~/.claude/bin/scrape-keyword-tuner.sh >> "$LOG" 2>&1 &
+    [[ $((M % 60)) -eq 0 ]] && bash ~/.surrogate/bin/scrape-keyword-tuner.sh >> "$LOG" 2>&1 &
     # Every 6 hours: research-loop (discover new features from competitors/papers)
-    [[ $((M % 360)) -eq 30 ]] && bash ~/.claude/bin/surrogate-research-loop.sh >> "$LOG" 2>&1 &
+    [[ $((M % 360)) -eq 30 ]] && bash ~/.surrogate/bin/surrogate-research-loop.sh >> "$LOG" 2>&1 &
     # Every 12 hours: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
-    [[ $((M % 720)) -eq 60 ]] && bash ~/.claude/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
+    [[ $((M % 720)) -eq 60 ]] && bash ~/.surrogate/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
     sleep 60
 done
 CRONSH
@@ -216,4 +235,4 @@ python3 -c "import fastapi, uvicorn; print(f'  fastapi {fastapi.__version__} + u
 }
 
 # Run as PID 1 — uvicorn handles signals + auto-restart on crash
-exec python3 ~/.claude/bin/hermes-status-server.py
+exec python3 ~/.surrogate/bin/hermes-status-server.py

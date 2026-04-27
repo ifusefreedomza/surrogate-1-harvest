@@ -4,13 +4,13 @@
 set -u
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LEDGER="$HOME/.claude/state/scrape-ledger.db"
-LOG="$HOME/.claude/logs/github-domain-scrape.log"
+LEDGER="$HOME/.surrogate/state/scrape-ledger.db"
+LOG="$HOME/.surrogate/logs/github-domain-scrape.log"
 DATE=$(date +%Y-%m-%d)
 OUT="$HOME/axentx/surrogate/data/training-jsonl/github-domain-${DATE}.jsonl"
 mkdir -p "$(dirname "$LOG")" "$(dirname "$OUT")"
 
-[[ ! -f "$LEDGER" ]] && bash "$HOME/.claude/bin/scrape-ledger-init.sh"
+[[ ! -f "$LEDGER" ]] && bash "$HOME/.surrogate/bin/scrape-ledger-init.sh"
 
 TARGET="${1:-}"
 export LEDGER OUT GITHUB_TOKEN GITHUB_TOKEN_POOL TARGET

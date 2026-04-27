@@ -26,9 +26,9 @@ from pydantic import BaseModel
 app = FastAPI(title="hermes", docs_url=None, redoc_url=None)
 
 HOME = Path(os.environ.get("HOME", "/home/hermes"))
-LEDGER = HOME / ".claude/state/scrape-ledger.db"
-EPISODES = HOME / ".claude/state/surrogate-memory/episodes.jsonl"
-LOG_DIR = HOME / ".claude/logs"
+LEDGER = HOME / ".surrogate/state/scrape-ledger.db"
+EPISODES = HOME / ".surrogate/state/surrogate-memory/episodes.jsonl"
+LOG_DIR = HOME / ".surrogate/logs"
 
 
 def _ledger_count() -> int:
@@ -92,7 +92,7 @@ async def chat(req: ChatRequest) -> JSONResponse:
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt is empty")
 
-    surrogate_bin = HOME / ".claude/bin/surrogate"
+    surrogate_bin = HOME / ".surrogate/bin/surrogate"
     if not surrogate_bin.exists():
         raise HTTPException(status_code=503, detail="surrogate CLI not installed in container")
 

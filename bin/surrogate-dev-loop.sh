@@ -16,7 +16,7 @@
 set -u
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/surrogate-dev-loop.log"
+LOG="$HOME/.surrogate/logs/surrogate-dev-loop.log"
 OUT_DIR="$HOME/.hermes/workspace/local-dev"
 mkdir -p "$(dirname "$LOG")" "$OUT_DIR"
 
@@ -28,7 +28,7 @@ SEARCH_ROOTS=(
     "$HOME/axentx"
     "$HOME/develope/DevOps"
     "$HOME/develope/AI"
-    "$HOME/.claude/bin"
+    "$HOME/.surrogate/bin"
 )
 
 # ── Task generators (pick one per cycle, weighted random) ────────────────────
@@ -41,7 +41,7 @@ ROOTS = [
     Path.home() / 'axentx',
     Path.home() / 'develope/DevOps',
     Path.home() / 'develope/AI',
-    Path.home() / '.claude/bin',
+    Path.home() / '.surrogate/bin',
 ]
 ROOTS = [p for p in ROOTS if p.exists()]
 

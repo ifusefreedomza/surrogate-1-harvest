@@ -9,7 +9,7 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/auto-orchestrate-loop.log"
+LOG="$HOME/.surrogate/logs/auto-orchestrate-loop.log"
 mkdir -p "$(dirname "$LOG")"
 
 # Resource guard: 20% headroom
@@ -107,14 +107,14 @@ TASK_DESC="Resolve this TODO/FIXME in $PROJ_NAME at $FILE:$LINE: \"$CONTENT\". I
 cd "$PROJECT" || { echo "[$(date +%H:%M:%S)] cd failed" >> "$LOG"; exit 1; }
 
 # Run the orchestrate pipeline (auto-commits on APPROVE)
-bash "$HOME/.claude/bin/surrogate-orchestrate.sh" "$TASK_DESC" >> "$LOG" 2>&1
+bash "$HOME/.surrogate/bin/surrogate-orchestrate.sh" "$TASK_DESC" >> "$LOG" 2>&1
 RC=$?
 DUR=$(( $(date +%s) - START ))
 
 echo "[$(date +%H:%M:%S)] orchestrate done in ${DUR}s rc=$RC" >> "$LOG"
 
 # Discord notification
-NOTIFY="$HOME/.claude/bin/notify-discord.sh"
+NOTIFY="$HOME/.surrogate/bin/notify-discord.sh"
 if [[ -x "$NOTIFY" ]]; then
     if [[ $RC -eq 0 ]]; then
         "$NOTIFY" task "Auto-orchestrate: $PROJ_NAME" "$FILE:$LINE — \`$(echo "$CONTENT" | head -c 80)\` · ${DUR}s" 2>/dev/null &

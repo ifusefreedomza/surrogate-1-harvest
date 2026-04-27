@@ -11,7 +11,7 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/scrape-keyword-tuner.log"
+LOG="$HOME/.surrogate/logs/scrape-keyword-tuner.log"
 mkdir -p "$(dirname "$LOG")"
 
 TOKEN="${GITHUB_TOKEN_POOL%%,*}"   # first non-empty
@@ -33,7 +33,7 @@ python3 <<PYEOF >> "$LOG" 2>&1
 import os, re, json, sqlite3, time, urllib.request, urllib.error, urllib.parse
 
 TOKEN = "$TOKEN"
-DB = os.path.expanduser("~/.claude/state/scrape-ledger.db")
+DB = os.path.expanduser("~/.surrogate/state/scrape-ledger.db")
 
 def github_count(keywords: str) -> int:
     """Return total_count from GitHub Search API (or -1 on error)."""

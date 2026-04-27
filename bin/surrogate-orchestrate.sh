@@ -26,7 +26,7 @@ CY=$'\033[36m'; GR=$'\033[32m'; YE=$'\033[33m'; MA=$'\033[35m'; RE=$'\033[31m'; 
 BCY=$'\033[96m'
 
 SESSION_ID=$(date +%s | tail -c 9)
-WORKDIR="$HOME/.claude/state/orchestrate/$SESSION_ID"
+WORKDIR="$HOME/.surrogate/state/orchestrate/$SESSION_ID"
 TRAINING_LOG="$HOME/.surrogate/training-pairs.jsonl"
 mkdir -p "$WORKDIR" "$(dirname "$TRAINING_LOG")"
 
@@ -273,7 +273,7 @@ PYEOF
         count=${count:-0}
         if [[ $count -gt 0 ]] && [[ $((count % 25)) -eq 0 ]]; then
             nohup bash "$HOME/.local/bin/push-training-to-hf.sh" \
-                > "$HOME/.claude/logs/training-push.log" 2>&1 &
+                > "$HOME/.surrogate/logs/training-push.log" 2>&1 &
         fi
     fi
 }

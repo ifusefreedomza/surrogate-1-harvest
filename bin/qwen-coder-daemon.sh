@@ -4,7 +4,7 @@
 # Pulls priority → invokes qwen-coder-worker.sh with pre-selected priority (env var).
 set -u
 
-LOG="$HOME/.claude/logs/qwen-coder-daemon.log"
+LOG="$HOME/.surrogate/logs/qwen-coder-daemon.log"
 mkdir -p "$(dirname "$LOG")"
 
 # Resolve Redis: Unix socket → TCP fallback. Build a redis-cli arg array reused below.
@@ -45,7 +45,7 @@ while true; do
     # can't race with other workers / stale file locks.
     START=$(date +%s)
     HERMES_PRIO_ID="$PRIO_ID" \
-        "$HOME/.claude/bin/qwen-coder-worker.sh" 2>&1 | tail -3 >> "$LOG"
+        "$HOME/.surrogate/bin/qwen-coder-worker.sh" 2>&1 | tail -3 >> "$LOG"
     DUR=$(( $(date +%s) - START ))
     echo "[$(date '+%H:%M:%S')] $PRIO_ID done in ${DUR}s" >> "$LOG"
 

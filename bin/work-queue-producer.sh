@@ -15,7 +15,7 @@
 # Dedup: hermes:seen:<prio_id> TTL 30 min prevents re-enqueue of in-flight work.
 set -u
 
-LOG="$HOME/.claude/logs/work-queue-producer.log"
+LOG="$HOME/.surrogate/logs/work-queue-producer.log"
 SHARED="$HOME/.hermes/workspace/swarm-shared"
 mkdir -p "$(dirname "$LOG")"
 

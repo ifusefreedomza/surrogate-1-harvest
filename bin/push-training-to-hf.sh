@@ -6,7 +6,7 @@ set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
 SRC="$HOME/.surrogate/training-pairs.jsonl"
 OFFSET_FILE="$HOME/.surrogate/.training-push-offset"
-LOG="$HOME/.claude/logs/training-push.log"
+LOG="$HOME/.surrogate/logs/training-push.log"
 mkdir -p "$(dirname "$LOG")"
 
 [[ ! -f "$SRC" ]] && { echo "[$(date +%H:%M:%S)] no source $SRC" | tee -a "$LOG"; exit 0; }

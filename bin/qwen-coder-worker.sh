@@ -7,7 +7,7 @@
 # Philosophy: cheap + fast iteration — reviewer catches bad outputs.
 set -u
 
-LOG="$HOME/.claude/logs/qwen-coder-worker.log"
+LOG="$HOME/.surrogate/logs/qwen-coder-worker.log"
 OUT_DIR="$HOME/.hermes/workspace/qwen-coder"
 SHARED="$HOME/.hermes/workspace/swarm-shared"
 mkdir -p "$(dirname "$LOG")" "$OUT_DIR"
@@ -58,8 +58,8 @@ MAP_FILE="$SHARED/repo-maps/${PRIO_PROJECT}.md"
 # RAG: fetch real code examples from THIS project's actual codebase via FTS
 # Grounds the model in real APIs/imports/patterns instead of hallucinating
 RAG_EXAMPLES=""
-if [[ -x "$HOME/.claude/bin/ask-sqlite.py" ]]; then
-    RAG_EXAMPLES=$(python3 "$HOME/.claude/bin/ask-sqlite.py" \
+if [[ -x "$HOME/.surrogate/bin/ask-sqlite.py" ]]; then
+    RAG_EXAMPLES=$(python3 "$HOME/.surrogate/bin/ask-sqlite.py" \
         "$PRIO_PROJECT $PRIO_TITLE" 2>/dev/null | head -c 2500)
 fi
 

@@ -5,15 +5,15 @@
 #   - load avg 1min (kill if > 10, warn if > 7)
 #   - memory free pages (warn if < 30k, emergency < 15k)
 #   - swap I/O rate (emergency if spiking)
-#   - disk space on ~/.claude/state (warn if < 2GB)
+#   - disk space on ~/.surrogate/state (warn if < 2GB)
 #   - scrape process count (cap at 30, kill oldest if exceeded)
 #
 # Actions:
 #   - WARN: log + throttle (pause new burst triggers via state file)
 #   - EMERGENCY: kill all scrape processes, set pause flag for 10 min
 set -u
-LOG="$HOME/.claude/logs/perf-watchdog.log"
-PAUSE_FLAG="$HOME/.claude/state/scrape-paused"
+LOG="$HOME/.surrogate/logs/perf-watchdog.log"
+PAUSE_FLAG="$HOME/.surrogate/state/scrape-paused"
 mkdir -p "$(dirname "$LOG")" "$(dirname "$PAUSE_FLAG")"
 
 # Thresholds

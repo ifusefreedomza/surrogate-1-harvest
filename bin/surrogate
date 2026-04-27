@@ -29,7 +29,7 @@ init_surrogate_home() {
   },
   "agents": ["architect","dev","qa","ops","reviewer"],
   "memory": {
-    "episodesFile": "~/.claude/state/surrogate-memory/episodes.jsonl",
+    "episodesFile": "~/.surrogate/state/episodes.jsonl",
     "projectFiles": "~/.surrogate/projects"
   }
 }
@@ -116,7 +116,7 @@ while [[ $# -gt 0 ]]; do
         init) MODE="init-project"; shift ;;
         plan)
             # surrogate plan set <file> | show | clear
-            bash ~/.claude/bin/surrogate-daemon.sh plan "$@"
+            bash ~/.surrogate/bin/surrogate-daemon.sh plan "$@"
             exit 0
             ;;
         .) shift ;;
@@ -224,7 +224,7 @@ GEMINI = os.environ.get('GEMINI_API_KEY','')
 GEMINI2 = os.environ.get('GEMINI_API_KEY_2','')
 GH_POOL = [t.strip() for t in os.environ.get('GITHUB_TOKEN_POOL','').split(',') if t.strip()]
 
-MEM_DIR = Path(os.path.expanduser('~/.claude/state/surrogate-memory'))
+MEM_DIR = Path(os.path.expanduser('~/.surrogate/state'))
 MEM_DIR.mkdir(parents=True, exist_ok=True)
 EPISODES = MEM_DIR / 'episodes.jsonl'
 
@@ -284,7 +284,7 @@ def tool_grep(pattern, path=None, glob='*'):
 
 def tool_rag_query(query, limit=5):
     try:
-        conn = sqlite3.connect(os.path.expanduser('~/.claude/index.db'))
+        conn = sqlite3.connect(os.path.expanduser('~/.surrogate/index.db'))
         kw = ' '.join(w for w in re.sub(r'[^a-zA-Z0-9ก-๙ ]',' ',query.lower()).split() if len(w)>2)[:200]
         rows = conn.execute("SELECT d.source, d.path, substr(d.response,1,500) FROM docs_fts f JOIN docs d ON d.id=f.rowid WHERE f.docs_fts MATCH ? ORDER BY bm25(docs_fts) LIMIT ?", (kw,limit)).fetchall()
         conn.close()
@@ -476,7 +476,7 @@ ${B}Configuration${R}:
   ${CY}/cwd${R} <path>           change working directory
 
 ${B}Diagnostics${R}:
-  ${CY}/memory${R}               show ~/.claude/state/surrogate-memory/
+  ${CY}/memory${R}               show ~/.surrogate/state/
   ${CY}/cost${R}                 OpenRouter usage today
   ${CY}/cost-all${R}              all provider usage breakdown
   ${CY}/health${R}               check HF endpoint + local CLI status
@@ -605,7 +605,7 @@ repl() {
                     *) echo "${GY}valid: plan | auto | yolo | default | acceptEdits${R}" ;;
                 esac
                 ;;
-            /memory) ls -lh ~/.claude/state/surrogate-memory/ 2>&1 | head -10 ;;
+            /memory) ls -lh ~/.surrogate/state/ 2>&1 | head -10 ;;
             /undo)
                 # Restore last checkpoint (git stash if uncommitted changes from last task)
                 if git -C "$(pwd)" rev-parse --git-dir &>/dev/null; then
@@ -958,7 +958,7 @@ PYEOF
 )
             [[ -z "$NEXT_TASK" ]] && { echo "${GR}✅ Plan complete — all tasks done!${R}"; break; }
             echo "${BCY}${B}▸ Next task:${R} $NEXT_TASK"
-            bash ~/.claude/bin/surrogate-orchestrate.sh "$NEXT_TASK"
+            bash ~/.surrogate/bin/surrogate-orchestrate.sh "$NEXT_TASK"
             # Mark done in plan
             /usr/bin/python3 <<PYEOF
 from pathlib import Path
@@ -984,11 +984,11 @@ PYEOF
             if ! IFS= read -r line; then echo ""; break; fi
             [[ -z "$line" ]] && continue
             [[ "$line" == "/exit" || "$line" == "exit" ]] && break
-            bash ~/.claude/bin/surrogate-orchestrate.sh "$line"
+            bash ~/.surrogate/bin/surrogate-orchestrate.sh "$line"
             echo ""
         done
     else
-        bash ~/.claude/bin/surrogate-orchestrate.sh "$task"
+        bash ~/.surrogate/bin/surrogate-orchestrate.sh "$task"
     fi
 }
 
@@ -999,13 +999,13 @@ plan_mode() {
         echo -en "${B}${YE}▶ plan >${R} "
         read -r task
     fi
-    bash ~/.claude/bin/surrogate-orchestrate.sh --mode plan "$task"
+    bash ~/.surrogate/bin/surrogate-orchestrate.sh --mode plan "$task"
 }
 
 # ═══ Monitor mode (watch cloud/logs, auto-fix) ═══
 monitor_mode() {
     echo "${B}${MA}▶ MONITOR MODE${R}"
-    echo "${D}  Watching ~/.claude/logs/, ~/.hermes/workspace/healer/, system load.${R}"
+    echo "${D}  Watching ~/.surrogate/logs/, ~/.hermes/workspace/healer/, system load.${R}"
     echo "${D}  Ctrl+C to stop.${R}"
     echo ""
     ITER=0
@@ -1027,15 +1027,15 @@ monitor_mode() {
         ls -t ~/.hermes/workspace/healer/*.md 2>/dev/null | head -3 | awk '{print "  " $0}' | xargs -I{} basename {} 2>/dev/null | sed 's/^/  /'
         # Training + graph
         PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}')
-        REPOS=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
+        REPOS=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null)
         echo "${B}data${R}    pairs=$PAIRS  repos=$REPOS"
         # Recent errors in logs (auto-heal trigger)
-        ERR_COUNT=$(tail -200 ~/.claude/logs/*.log 2>/dev/null | grep -cE "ERROR|Fatal|CRITICAL|429|403|500" || echo 0)
+        ERR_COUNT=$(tail -200 ~/.surrogate/logs/*.log 2>/dev/null | grep -cE "ERROR|Fatal|CRITICAL|429|403|500" || echo 0)
         echo "${B}errors${R}  last 200 log lines: $ERR_COUNT"
         # If critical → spawn agent to investigate
         if [[ $ERR_COUNT -gt 50 ]]; then
             echo "${RE}⚠ elevated errors — dispatching investigator agent${R}"
-            (run_agent "เช็ค ~/.claude/logs/ หา pattern error ที่ recur บ่อย และเสนอ fix list (ห้ามแก้เอง รายงานอย่างเดียว)" 2>&1 | /usr/bin/head -20) &
+            (run_agent "เช็ค ~/.surrogate/logs/ หา pattern error ที่ recur บ่อย และเสนอ fix list (ห้ามแก้เอง รายงานอย่างเดียว)" 2>&1 | /usr/bin/head -20) &
         fi
         sleep 30
     done
@@ -1045,9 +1045,9 @@ monitor_mode() {
 show_status() {
     banner
     echo ""
-    REPOS=$(sqlite3 ~/.claude/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null || echo "?")
+    REPOS=$(sqlite3 ~/.surrogate/state/scrape-ledger.db "SELECT COUNT(*) FROM scraped" 2>/dev/null || echo "?")
     PAIRS=$(wc -l ~/axentx/surrogate/data/training-jsonl/*.jsonl 2>/dev/null | tail -1 | awk '{print $1}' || echo "?")
-    EP=$(wc -l ~/.claude/state/surrogate-memory/episodes.jsonl 2>/dev/null | awk '{print $1}' || echo "0")
+    EP=$(wc -l ~/.surrogate/state/episodes.jsonl 2>/dev/null | awk '{print $1}' || echo "0")
     PLAN_FILE="$SURROGATE_HOME/active-plan.md"
     echo "${B}▸ Session${R}"
     echo "  cwd:            ${GR}$(pwd)${R}"
@@ -1069,8 +1069,8 @@ show_status() {
 show_agents() {
     banner
     echo ""
-    echo "${B}▸ Available agents (~/.claude/agents/)${R}"
-    ls ~/.claude/agents/*.md 2>/dev/null | /usr/bin/sed 's|.*/||;s|.md$||' | sed 's/^/  /'
+    echo "${B}▸ Available agents (~/.surrogate/agents/)${R}"
+    ls ~/.surrogate/agents/*.md 2>/dev/null | /usr/bin/sed 's|.*/||;s|.md$||' | sed 's/^/  /'
 }
 
 # ═══ Dispatch ═══
@@ -1086,7 +1086,7 @@ case "$MODE" in
         if [[ -n "$PROMPT" ]]; then plan_mode "$PROMPT"
         else
             # No task — show plan status
-            bash ~/.claude/bin/surrogate-daemon.sh plan show
+            bash ~/.surrogate/bin/surrogate-daemon.sh plan show
         fi
         ;;
     print)

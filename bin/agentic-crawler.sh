@@ -9,8 +9,8 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-DB="$HOME/.claude/state/agentic-frontier.db"
-LOG="$HOME/.claude/logs/agentic-crawler.log"
+DB="$HOME/.surrogate/state/agentic-frontier.db"
+LOG="$HOME/.surrogate/logs/agentic-crawler.log"
 PAIRS="$HOME/.surrogate/training-pairs.jsonl"
 mkdir -p "$(dirname "$DB")" "$(dirname "$LOG")" "$(dirname "$PAIRS")"
 

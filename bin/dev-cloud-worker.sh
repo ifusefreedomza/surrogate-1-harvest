@@ -7,17 +7,17 @@
 #   provider = github | samba | cloudflare | groq | gemini
 #
 # Rate-limit aware per provider (set by cron schedule, NOT inside script).
-# Cross-worker coordination: lockfile per (priority, provider) in ~/.claude/state/dev-locks/
+# Cross-worker coordination: lockfile per (priority, provider) in ~/.surrogate/state/dev-locks/
 # Global priority lock: 30-min window, so same priority only gets fresh attempt per provider
 # every 30 min (prevents redundant work, allows tournament of implementations over time).
 set -u
 
 PROVIDER="${1:?usage: dev-cloud-worker.sh <github|samba|cloudflare|groq|gemini>}"
 
-LOG="$HOME/.claude/logs/dev-cloud-$PROVIDER.log"
+LOG="$HOME/.surrogate/logs/dev-cloud-$PROVIDER.log"
 OUT_DIR="$HOME/.hermes/workspace/dev-cloud-$PROVIDER"
 SHARED="$HOME/.hermes/workspace/swarm-shared"
-LOCK_DIR="$HOME/.claude/state/dev-locks"
+LOCK_DIR="$HOME/.surrogate/state/dev-locks"
 mkdir -p "$(dirname "$LOG")" "$OUT_DIR" "$LOCK_DIR"
 
 START=$(date +%s)
@@ -143,7 +143,7 @@ PRIO_PROJECT=$(echo "$PRIORITY" | python3 -c "import json,sys; print(json.loads(
 echo "[$(date '+%H:%M:%S')] $PROVIDER picked $PRIO_ID ($PRIO_PROJECT: ${PRIO_TITLE:0:60})" >> "$LOG"
 
 # -------- Rich context injection (B: enrich with repo + similar funcs + few-shot + deltas) --------
-source "$HOME/.claude/bin/lib/context_builder.sh"
+source "$HOME/.surrogate/bin/lib/context_builder.sh"
 build_rich_context "$PRIO_PROJECT" "$PRIO_ID" "$PRIO_TITLE"
 # Sets: REPO_MAP, SIMILAR_FUNCS, RAG_EXAMPLES, SEMANTIC_RAG, FEWSHOT_ACCEPTED, ANTI_PATTERNS, PROMPT_DELTAS, PRIO_SPEC
 
@@ -285,37 +285,37 @@ case "$PROVIDER" in
     github)
         # Codestral-2501 is Mistral's dedicated code model — free via PAT, top-tier for code tasks.
         # Better than gpt-4o-mini for coding specifically. Budget-aware: falls through if HALT.
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/github-bridge.sh" --model codestral 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/github-bridge.sh" --model codestral 2>>"$LOG")
         ;;
     samba|sambanova)
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/sambanova-bridge.sh" --model deepseek 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/sambanova-bridge.sh" --model deepseek 2>>"$LOG")
         ;;
     cloudflare|cf)
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/cloudflare-bridge.sh" --model deepseek 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/cloudflare-bridge.sh" --model deepseek 2>>"$LOG")
         ;;
     groq)
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/groq-bridge.sh" --model qwen 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/groq-bridge.sh" --model qwen 2>>"$LOG")
         ;;
     gemini)
         # Use ai-fallback's gemini path
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/ai-fallback.sh" --force gemini 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/ai-fallback.sh" --force gemini 2>>"$LOG")
         ;;
     cerebras)
         # Wafer-scale — fastest inference on planet (~2000 tok/s). Qwen3 235B excellent for code.
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/cerebras-bridge.sh" --model big 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/cerebras-bridge.sh" --model big 2>>"$LOG")
         ;;
     nvidia|nim)
         # NVIDIA NIM — Llama 3.3 70B, diverse model pool (Nemotron, DeepSeek-R1, Qwen-Coder)
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/nvidia-bridge.sh" --model qwen 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/nvidia-bridge.sh" --model qwen 2>>"$LOG")
         ;;
     chutes)
         # Chutes.ai aggregator — free tier needs activation; currently may 402
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/chutes-bridge.sh" --model deepseek 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/chutes-bridge.sh" --model deepseek 2>>"$LOG")
         ;;
     surrogate|surrogate-1)
         # น้อง — local Ollama, Ashira-personalized (Qwen2.5-Coder-7B + Thai/DevSecOps prompt)
         # Will be upgraded with LoRA adapter after RunPod training.
-        RESULT=$(echo "$PROMPT" | "$HOME/.claude/bin/surrogate-bridge.sh" 2>>"$LOG")
+        RESULT=$(echo "$PROMPT" | "$HOME/.surrogate/bin/surrogate-bridge.sh" 2>>"$LOG")
         ;;
     *)
         echo "[$(date '+%H:%M:%S')] unknown provider $PROVIDER" >> "$LOG"

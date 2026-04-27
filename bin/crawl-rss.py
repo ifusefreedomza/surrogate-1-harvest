@@ -5,7 +5,7 @@ Reads feed URLs from FEEDS env or default list, parses entries, writes JSONL
 to output file. Only writes entries not seen before (dedup by URL).
 
 Usage (from bash):
-    OUT=/tmp/out.jsonl python3 ~/.claude/bin/crawl-rss.py
+    OUT=/tmp/out.jsonl python3 ~/.surrogate/bin/crawl-rss.py
 
 All feeds VERIFIED to return 200 as of 2026-04-19. Failures are logged,
 not fatal — one bad feed doesn't kill the rest.
@@ -86,7 +86,7 @@ FEEDS: list[tuple[str, str]] = [
 ]
 
 OUT_PATH = os.environ.get("OUT", "/tmp/rss-crawl.jsonl")
-SEEN_PATH = os.environ.get("SEEN", os.path.expanduser("~/.claude/.rss-seen.json"))
+SEEN_PATH = os.environ.get("SEEN", os.path.expanduser("~/.surrogate/.rss-seen.json"))
 MAX_ENTRIES_PER_FEED = int(os.environ.get("MAX_PER_FEED", "10"))
 TIMEOUT = int(os.environ.get("TIMEOUT", "15"))
 

@@ -5,7 +5,7 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/surrogate-research-apply.log"
+LOG="$HOME/.surrogate/logs/surrogate-research-apply.log"
 QUEUE="$HOME/.hermes/workspace/research/queue.txt"
 APPLIED="$HOME/.hermes/workspace/research/applied.log"
 mkdir -p "$(dirname "$QUEUE")" "$(dirname "$LOG")"

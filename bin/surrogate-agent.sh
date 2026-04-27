@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$TASK" ]] && { echo "usage: $0 [--max-steps N] [--model M] <task>" >&2; exit 2; }
 
-MEM_DIR="$HOME/.claude/state/surrogate-memory"
+MEM_DIR="$HOME/.surrogate/state/surrogate-memory"
 mkdir -p "$MEM_DIR"
 
 export AGENT_TASK="$TASK"
@@ -49,7 +49,7 @@ TASK = os.environ['AGENT_TASK']
 MAX_STEPS = int(os.environ['AGENT_MAX_STEPS'])
 MODEL_OVERRIDE = os.environ.get('AGENT_MODEL_OVERRIDE', '')
 OPENROUTER = os.environ.get('OPENROUTER_API_KEY', '')
-MEM_DIR = Path(os.path.expanduser('~/.claude/state/surrogate-memory'))
+MEM_DIR = Path(os.path.expanduser('~/.surrogate/state/surrogate-memory'))
 EPISODES = MEM_DIR / 'episodes.jsonl'
 PATTERNS = MEM_DIR / 'patterns.jsonl'
 SYS_PROMPT = ''
@@ -148,7 +148,7 @@ def tool_rag_query(query, limit=5, source_filter=None):
     import subprocess as _sp
     try:
         # 1. BM25 via SQLite FTS
-        conn = sqlite3.connect(os.path.expanduser('~/.claude/index.db'))
+        conn = sqlite3.connect(os.path.expanduser('~/.surrogate/index.db'))
         kw = ' '.join(w for w in re.sub(r'[^a-zA-Z0-9ก-๙ ]', ' ', query.lower()).split() if len(w) > 2)[:200]
         q = "SELECT d.source, d.path, substr(d.response, 1, 500), d.id FROM docs_fts f JOIN docs d ON d.id=f.rowid WHERE f.docs_fts MATCH ?"
         params = [kw]
@@ -166,9 +166,9 @@ def tool_rag_query(query, limit=5, source_filter=None):
         dense_docs = []
         if len(query) > 10:
             try:
-                cmd = f"""~/.claude/state/crawler-venv/bin/python -c "
+                cmd = f"""~/.surrogate/state/crawler-venv/bin/python -c "
 import chromadb, json, sys
-client = chromadb.PersistentClient(path='/Users/Ashira/.claude/code-vector-db')
+client = chromadb.PersistentClient(path='$HOME/.surrogate/code-vector-db')
 cols = client.list_collections()
 if cols:
     r = cols[0].query(query_texts=['{query[:200].replace(chr(39),chr(92)+chr(39))}'], n_results={max(limit*3,20)})
@@ -206,7 +206,7 @@ def tool_rag_code(query, limit=5):
     """Query code knowledge — routed through SQLite FTS (no Chroma load, crash-safe).
     Searches `code` + `code-vector` + `code-deep:*` sources in index.db via BM25."""
     try:
-        conn = sqlite3.connect(os.path.expanduser('~/.claude/index.db'))
+        conn = sqlite3.connect(os.path.expanduser('~/.surrogate/index.db'))
         kw = ' '.join(w for w in re.sub(r'[^a-zA-Z0-9ก-๙ ]', ' ', query.lower()).split() if len(w) > 2)[:200]
         rows = conn.execute("""
             SELECT d.source, d.path, substr(d.response, 1, 500)
@@ -222,7 +222,7 @@ def tool_rag_code(query, limit=5):
 
 def tool_web_fetch(url, timeout=45):
     try:
-        cmd = f"""$HOME/.claude/state/crawler-venv/bin/python -c "
+        cmd = f"""$HOME/.surrogate/state/crawler-venv/bin/python -c "
 import asyncio
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 async def f():
@@ -254,7 +254,7 @@ def tool_task(prompt, max_steps=5):
     sub_id = uuid.uuid4().hex[:8]
     print(f"   ↳ [sub-agent {sub_id}] spawning: {prompt[:80]}", flush=True)
     try:
-        cmd = ['bash', os.path.expanduser('~/.claude/bin/surrogate-agent.sh'),
+        cmd = ['bash', os.path.expanduser('~/.surrogate/bin/surrogate-agent.sh'),
                '--max-steps', str(max_steps), prompt]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         return {'sub_id': sub_id, 'output': r.stdout[-4000:], 'rc': r.returncode}
@@ -274,7 +274,7 @@ def tool_orchestrate(subtasks, pattern='parallel', max_steps=5):
     def run_one(prompt):
         try:
             r = subprocess.run(
-                ['bash', os.path.expanduser('~/.claude/bin/surrogate-agent.sh'),
+                ['bash', os.path.expanduser('~/.surrogate/bin/surrogate-agent.sh'),
                  '--max-steps', str(max_steps), prompt],
                 capture_output=True, text=True, timeout=600
             )
@@ -426,7 +426,7 @@ TOOLS = {
 def check_budget():
     """Return True if under daily budget ($2/day default). Caller aborts if False."""
     import time as _t
-    cache = Path(os.path.expanduser('~/.claude/state/openrouter-budget-cache.json'))
+    cache = Path(os.path.expanduser('~/.surrogate/state/openrouter-budget-cache.json'))
     # Cache balance check for 5 min (reduce API calls)
     try:
         if cache.exists() and _t.time() - cache.stat().st_mtime < 300:
@@ -439,7 +439,7 @@ def check_budget():
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({'usage': d.get('usage',0), 'ts': _t.time()}))
         # Check today's marker
-        today_f = Path(os.path.expanduser('~/.claude/state/openrouter-today-start.txt'))
+        today_f = Path(os.path.expanduser('~/.surrogate/state/openrouter-today-start.txt'))
         today_str = datetime.now().strftime('%Y-%m-%d')
         if not today_f.exists() or today_f.read_text().split(':')[0] != today_str:
             today_f.parent.mkdir(parents=True, exist_ok=True)

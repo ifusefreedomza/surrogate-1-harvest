@@ -6,7 +6,7 @@
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
-LOG="$HOME/.claude/logs/surrogate-research-loop.log"
+LOG="$HOME/.surrogate/logs/surrogate-research-loop.log"
 RESEARCH_DIR="$HOME/.hermes/workspace/research"
 APPLIED_DIR="$RESEARCH_DIR/applied"
 mkdir -p "$RESEARCH_DIR" "$APPLIED_DIR" "$(dirname "$LOG")"
