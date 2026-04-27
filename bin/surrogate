@@ -199,7 +199,7 @@ run_agent() {
     export AGENT_EFFORT="$EFFORT"
     export AGENT_CWD="$(pwd)"
 
-    python3 <<'PYEOF'
+    /usr/bin/python3 <<'PYEOF'
 import os, sys, json, re, sqlite3, subprocess, urllib.request, urllib.error, time
 from datetime import datetime
 from pathlib import Path
@@ -498,7 +498,7 @@ print_statusline() {
         if [[ ! -f "$cache" ]] || [[ $(($(date +%s) - $(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0))) -gt 60 ]]; then
             (curl -sS -m 5 -H "Authorization: Bearer ${OPENROUTER_API_KEY:-${OR_KEY:-}}" \
                 https://openrouter.ai/api/v1/auth/key 2>/dev/null \
-                | python3 -c "import json,sys; d=json.load(sys.stdin).get('data',{}); print(f'\$OR={d.get(\"usage\",0):.3f}')" \
+                | /usr/bin/python3 -c "import json,sys; d=json.load(sys.stdin).get('data',{}); print(f'\$OR={d.get(\"usage\",0):.3f}')" \
                 > "$cache") 2>/dev/null &
         fi
         cost_str=$(cat "$cache" 2>/dev/null | head -1)
@@ -516,7 +516,7 @@ HISTORY_FILE="$SURROGATE_HOME/history.jsonl"
 mkdir -p "$(dirname "$HISTORY_FILE")"
 save_history() {
     local prompt="$1"
-    python3 -c "
+    /usr/bin/python3 -c "
 import json, sys, time
 from pathlib import Path
 Path('$HISTORY_FILE').parent.mkdir(parents=True, exist_ok=True)
@@ -623,7 +623,7 @@ repl() {
                 ;;
             /history)
                 if [[ -f "$HISTORY_FILE" ]]; then
-                    python3 -c "
+                    /usr/bin/python3 -c "
 import json
 from pathlib import Path
 import time
@@ -654,7 +654,7 @@ for l in lines:
                 fi
                 ;;
             /cost)
-                bash -c 'source ~/.hermes/.env; curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/auth/key' 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin).get('data',{}); print(f'  OpenRouter: \${d.get(\"usage\",0):.4f}')"
+                bash -c 'source ~/.hermes/.env; curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/auth/key' 2>&1 | /usr/bin/python3 -c "import json,sys; d=json.load(sys.stdin).get('data',{}); print(f'  OpenRouter: \${d.get(\"usage\",0):.4f}')"
                 ;;
             /cost-all) bash "$0" --status ;;
             /remote*)
@@ -703,7 +703,7 @@ init_project() {
     echo "${B}2. One-line description${R} (what does it do? for whom?):"
     read -rp "  > " Q_DESC
     echo ""
-    echo "${B}3. Tech stack${R} (e.g. \"Python 3.12 + FastAPI + PostgreSQL + AWS CDK\"):"
+    echo "${B}3. Tech stack${R} (any language/framework/infra — e.g. \"Go + Postgres + K8s\", \"Next.js + Supabase\", \"AWS CDK + Lambda\", \"existing repo: Java Spring\"):"
     read -rp "  > " Q_STACK
     echo ""
     echo "${B}4. Architecture style${R} [hex|ddd|mvc|micro|mono] (default: ddd):"
@@ -729,10 +729,39 @@ init_project() {
     read -rp "  > " Q_USERS
     echo ""
 
-    echo "${YE}▶ Generating ${target} via Surrogate-1 (HF brain)...${R}"
-    echo ""
+    # ── Step A: web research the tech keywords (free, fast, grounds the PRD) ─
+    echo "${MA}▶ Researching tech context...${R}"
+    local research_md=""
+    research_md=$(/usr/bin/python3 - "$Q_STACK $Q_DESC $Q_FEATURES" <<'PYEOF' 2>/dev/null
+import sys, urllib.request, urllib.parse, re
+text = sys.argv[1]
+# Extract candidate tech keywords (CamelCase, lowercase known stacks, version tags)
+kws = re.findall(r'\b[A-Z][a-zA-Z0-9]{2,}\b|\b[a-z][a-z0-9-]{3,}\b', text)
+stop = {'this','that','from','with','into','what','when','where','description','project','features','users','stack',
+        'architecture','test','strategy','constraints','context'}
+kws = [k for k in kws if k.lower() not in stop and len(k) > 3]
+kws = list(dict.fromkeys(kws))[:4]
+if not kws:
+    sys.exit(0)
+q = ' '.join(kws) + ' best practices architecture 2025'
+try:
+    req = urllib.request.Request(f"https://duckduckgo.com/html/?q={urllib.parse.quote(q)}",
+        headers={'User-Agent':'Mozilla/5.0'})
+    html = urllib.request.urlopen(req, timeout=12).read().decode('utf-8', errors='ignore')
+    snippets = re.findall(r'class="result__snippet"[^>]*>([^<]+)<', html)[:5]
+    if snippets:
+        print(f"\n## Research context ({', '.join(kws)})")
+        for s in snippets:
+            print(f"- {re.sub(r'<[^>]+>','',s).strip()[:300]}")
+except Exception:
+    pass
+PYEOF
+)
+    [[ -n "$research_md" ]] && echo "${D}  ${research_md}${R}" | head -3
 
-    # ── Build prompt for Surrogate-1 to generate PRD ─────────────────────────
+    # ── Step B: build PRD prompt (research-grounded) ─────────────────────────
+    echo ""
+    echo "${YE}▶ Generating ${target}...${R}"
     local prompt="You are an elite product/architecture strategist. Generate a COMPLETE, professional surrogate.md (PRD + ADRs + plan) based on these inputs:
 
 # Project: $Q_NAME
@@ -744,6 +773,7 @@ init_project() {
 - Users/context: $Q_USERS
 - Features:
 $Q_FEATURES
+${research_md}
 
 Output structure (markdown):
 
@@ -753,19 +783,19 @@ Output structure (markdown):
 ## Vision & Mission
 
 ## Tech Stack
-<expand from input — include lib versions, infra services, observability stack>
+<expand from input — adapt to chosen language/runtime; include lib versions where relevant, infra services, observability stack>
 
 ## Architecture
 <chosen style with rationale. Diagram in mermaid if applicable.>
 
 ## Domain Model
-<DDD: bounded contexts, entities, aggregates, value objects, repositories — based on features>
+<DDD: bounded contexts, entities, aggregates, value objects, repositories — derived from features>
 
 ## Coding Standards
-- TDD: test-first, one assertion per test, factory functions for fixtures
+- $Q_TEST: test-first if tdd, one assertion per test, factory fixtures
 - $Q_ARCH design patterns enforced (Repository, Factory, Strategy, Builder where appropriate)
-- Type-strict, parse-don't-validate, branded types
-- Result/Either over throws
+- Type-strict in chosen language (TS strict / Python type hints / Go generics / Rust traits)
+- Result/Either over throws for expected errors
 - Naming: intent-revealing, units in names (retryDelayMs)
 
 ## Key Files (initial structure)
@@ -781,7 +811,7 @@ Output structure (markdown):
 
 ## Auto-Dev Plan
 - [ ] task description (atomic, ~30 min each, dev → QA → reviewer)
-<break each feature into 3-7 tasks. Format strictly: '- [ ] <verb> <object>'>
+<break each feature into 3–7 tasks. Format strictly: '- [ ] <verb> <object>'>
 
 ## Test Strategy
 <test pyramid breakdown for $Q_TEST>
@@ -792,20 +822,79 @@ Output structure (markdown):
 - Docs updated
 - ADRs reflect actual implementation
 
-Output ONLY the markdown, no preamble. Be specific to the project — not generic boilerplate."
+Output ONLY the markdown, no preamble. Adapt to the actual stack the user chose — never default to Python unless they said Python."
 
-    # Call Surrogate-1 (HF brain or local fallback)
-    local prd
-    prd=$(echo "$prompt" | timeout 180 "$0" -p --max-steps 5 2>&1 | tail -200)
+    # ── Step C: direct LLM call (curl), bypassing the agent tool-loop ──
+    local prd=""
+    if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+        prd=$(/usr/bin/python3 - "$prompt" "$GEMINI_API_KEY" <<'PYEOF' 2>/dev/null
+import sys, json, urllib.request
+prompt, key = sys.argv[1], sys.argv[2]
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+body = {"contents":[{"parts":[{"text":prompt}]}],
+        "generationConfig":{"temperature":0.3,"maxOutputTokens":8192}}
+req = urllib.request.Request(url, data=json.dumps(body).encode(),
+    headers={"Content-Type":"application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=120) as r:
+        d = json.load(r)
+        print(d["candidates"][0]["content"]["parts"][0]["text"])
+except Exception as e:
+    print(f"GEMINI_ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+PYEOF
+)
+    fi
+    if [[ -z "$prd" ]] || [[ ${#prd} -lt 400 ]]; then
+        if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+            prd=$(/usr/bin/python3 - "$prompt" "$OPENROUTER_API_KEY" <<'PYEOF' 2>/dev/null
+import sys, json, urllib.request
+prompt, key = sys.argv[1], sys.argv[2]
+body = {"model":"qwen/qwen3-coter","messages":[{"role":"user","content":prompt}],
+        "temperature":0.3,"max_tokens":8000}
+# Fix model id typo
+body["model"] = "qwen/qwen3-coder"
+req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",
+    data=json.dumps(body).encode(),
+    headers={"Content-Type":"application/json","Authorization":f"Bearer {key}",
+             "HTTP-Referer":"https://axentx.ai","X-Title":"Surrogate-1"})
+try:
+    with urllib.request.urlopen(req, timeout=120) as r:
+        d = json.load(r)
+        print(d["choices"][0]["message"]["content"])
+except Exception as e:
+    print(f"OR_ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+PYEOF
+)
+        fi
+    fi
 
-    # Filter to just the markdown part (drop spinner/log lines)
-    prd=$(echo "$prd" | sed -E 's/^\[[0-9:]+\]//; /^[⏺●]/d; /thinking\.\.\./d')
+    # Strip stray code-fences if model wrapped output
+    prd=$(echo "$prd" | sed -E '/^```markdown\s*$/d; /^```\s*$/d')
 
-    if [[ -z "$prd" ]] || [[ ${#prd} -lt 200 ]]; then
-        echo "${RE}❌ PRD generation failed or too short. Falling back to template.${R}"
+    if [[ -z "$prd" ]] || [[ ${#prd} -lt 400 ]]; then
+        echo "${RE}❌ PRD generation failed (Gemini + OpenRouter both empty/short). Falling back to template.${R}"
         cp "$SURROGATE_HOME/SURROGATE.md.template" "$target"
     else
         echo "$prd" > "$target"
+        # ── Step D: push PRD as training pair (HF dataset feedback loop) ───
+        /usr/bin/python3 - "$prompt" "$prd" <<'PYEOF' 2>/dev/null &
+import sys, json, time, os
+from pathlib import Path
+log = Path.home() / '.surrogate' / 'training-pairs.jsonl'
+log.parent.mkdir(parents=True, exist_ok=True)
+with open(log, 'a') as f:
+    f.write(json.dumps({
+        'ts': time.time(),
+        'source': 'prd-wizard',
+        'cwd': os.getcwd(),
+        'prompt': sys.argv[1][:8000],
+        'response': sys.argv[2][:12000],
+        'messages': [
+            {'role':'user','content':sys.argv[1][:8000]},
+            {'role':'assistant','content':sys.argv[2][:12000]},
+        ],
+    }, ensure_ascii=False) + '\n')
+PYEOF
     fi
 
     echo ""
@@ -845,7 +934,7 @@ auto_dev_mode() {
         # Drive tasks from plan until all done
         while true; do
             # Pop next pending task from plan
-            NEXT_TASK=$(python3 <<'PYEOF'
+            NEXT_TASK=$(/usr/bin/python3 <<'PYEOF'
 import sys, re
 from pathlib import Path
 plan_file = Path.home() / '.surrogate' / 'active-plan.md'
@@ -864,7 +953,7 @@ PYEOF
             echo "${BCY}${B}▸ Next task:${R} $NEXT_TASK"
             bash ~/.claude/bin/surrogate-orchestrate.sh "$NEXT_TASK"
             # Mark done in plan
-            python3 <<PYEOF
+            /usr/bin/python3 <<PYEOF
 from pathlib import Path
 plan_file = Path.home() / '.surrogate' / 'active-plan.md'
 if plan_file.exists():

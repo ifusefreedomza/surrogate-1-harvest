@@ -117,10 +117,23 @@ OLLAMA_HOST=127.0.0.1:11434 \
 nohup ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
 sleep 6
 
-# Pull model only on first boot (model cache lives in /data/.ollama/models)
+# Pull models only on first boot (cache lives in /data/.ollama/models).
+# Primary coding brain: qwen3-coder MoE (newest official Qwen coder; ~16GB Q4, 3B active = fast on CPU).
+# Fallback: qwen2.5-coder:14b (proven). Light: gemma4:e4b (kept for quick triage).
+#
+# Note: user asked about "qwen3.6" — that's a community general-chat fine-tune,
+# not coder-specialized. qwen3-coder is the official Qwen team flagship for SDLC tasks.
+if ! ollama list 2>/dev/null | grep -q "qwen3-coder"; then
+    echo "[$(date +%H:%M:%S)] pulling qwen3-coder:30b-a3b (~16 GB MoE, primary brain)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull qwen3-coder:30b-a3b-instruct-q4_K_M > "$LOG_DIR/ollama-pull-coder.log" 2>&1 &
+fi
+if ! ollama list 2>/dev/null | grep -q "qwen2.5-coder:14b"; then
+    echo "[$(date +%H:%M:%S)] pulling qwen2.5-coder:14b (~9 GB, fallback brain)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull qwen2.5-coder:14b-instruct-q4_K_M > "$LOG_DIR/ollama-pull-fallback.log" 2>&1 &
+fi
 if ! ollama list 2>/dev/null | grep -q "gemma4:e4b"; then
-    echo "[$(date +%H:%M:%S)] pulling gemma4:e4b (~9.6 GB, first boot, 5-15 min)" >> "$LOG_DIR/boot.log"
-    nohup ollama pull gemma4:e4b > "$LOG_DIR/ollama-pull.log" 2>&1 &
+    echo "[$(date +%H:%M:%S)] pulling gemma4:e4b (light triage)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull gemma4:e4b > "$LOG_DIR/ollama-pull-light.log" 2>&1 &
 fi
 
 # ── 6. Discord bot (background) ─────────────────────────────────────────────
@@ -131,7 +144,34 @@ if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
     echo "[$(date +%H:%M:%S)] discord bot started"
 fi
 
-# ── 7. Cron loop — fires Hermes daemons 24/7 (no sleep gaps) ────────────────
+# ── 7a. Continuous scrape daemon (no idle gaps — runs back-to-back batches) ─
+cat > /tmp/scrape-daemon.sh <<'SCRAPESH'
+#!/bin/bash
+# Runs scrape batches continuously. Cool-down between cycles only to respect rate limits.
+set -a; source ~/.hermes/.env 2>/dev/null; set +a
+LOG="${HOME}/.claude/logs/scrape-continuous.log"
+mkdir -p "$(dirname "$LOG")"
+while true; do
+    START=$(date +%s)
+    # Adaptive cool-down: short if last batch was small, long if hit rate limits
+    bash ~/.claude/bin/domain-scrape-loop.sh 800 4 >> "$LOG" 2>&1
+    DUR=$(( $(date +%s) - START ))
+    # If batch took < 60s the queue was empty / rate-limited → cool down 90s
+    # If batch took > 5min it was productive → only 30s cool-down
+    if [[ $DUR -lt 60 ]]; then
+        sleep 90
+    elif [[ $DUR -lt 300 ]]; then
+        sleep 60
+    else
+        sleep 30
+    fi
+done
+SCRAPESH
+chmod +x /tmp/scrape-daemon.sh
+nohup /tmp/scrape-daemon.sh > "$LOG_DIR/scrape-daemon.log" 2>&1 &
+echo "[$(date +%H:%M:%S)] continuous scrape daemon started" >> "$LOG_DIR/boot.log"
+
+# ── 7b. Cron loop — non-scrape daemons (scrape now runs continuously above) ─
 cat > /tmp/hermes-cron.sh <<'CRONSH'
 #!/bin/bash
 set -a; source ~/.hermes/.env 2>/dev/null; set +a
@@ -139,20 +179,22 @@ LOG="${HOME}/.claude/logs/cron.log"
 mkdir -p "$(dirname "$LOG")"
 while true; do
     M=$(($(date +%s) / 60))
-    # Every 90s: continuous local dev (gemma)
+    # Every 2 min: continuous local dev (qwen3-coder when ready, else gemma)
     [[ $((M % 2)) -eq 0 ]] && bash ~/.claude/bin/surrogate-dev-loop.sh 1 >> "$LOG" 2>&1 &
     # Every 5 min: producer pushes priorities to Redis
     [[ $((M % 5)) -eq 0 ]] && bash ~/.claude/bin/work-queue-producer.sh >> "$LOG" 2>&1 &
+    # Every 10 min: training-pair push to HF (drains ~/.surrogate/training-pairs.jsonl)
+    [[ $((M % 10)) -eq 0 ]] && bash ~/.claude/bin/push-training-to-hf.sh >> "$LOG" 2>&1 &
     # Every 20 min: full orchestrate chain (architect → dev → qa → reviewer + git push)
     [[ $((M % 20)) -eq 0 ]] && bash ~/.claude/bin/auto-orchestrate-loop.sh >> "$LOG" 2>&1 &
-    # Every 30 min: scrape loop (parallel 4)
-    [[ $((M % 30)) -eq 0 ]] && bash ~/.claude/bin/domain-scrape-loop.sh 1700 4 >> "$LOG" 2>&1 &
     # Every 30 min: research-apply (pop queue → orchestrate → ship feature)
     [[ $((M % 30)) -eq 15 ]] && bash ~/.claude/bin/surrogate-research-apply.sh >> "$LOG" 2>&1 &
-    # Every 60 min: keyword tuner
+    # Every 60 min: keyword tuner (adapts scrape queue based on yields)
     [[ $((M % 60)) -eq 0 ]] && bash ~/.claude/bin/scrape-keyword-tuner.sh >> "$LOG" 2>&1 &
     # Every 6 hours: research-loop (discover new features from competitors/papers)
     [[ $((M % 360)) -eq 30 ]] && bash ~/.claude/bin/surrogate-research-loop.sh >> "$LOG" 2>&1 &
+    # Every 12 hours: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
+    [[ $((M % 720)) -eq 60 ]] && bash ~/.claude/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
     sleep 60
 done
 CRONSH
