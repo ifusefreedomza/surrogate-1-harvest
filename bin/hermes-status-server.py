@@ -16,8 +16,12 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+import asyncio
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 
 app = FastAPI(title="hermes", docs_url=None, redoc_url=None)
 
@@ -71,6 +75,56 @@ def root() -> JSONResponse:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+class ChatRequest(BaseModel):
+    prompt: str
+    cwd: str | None = None
+    max_steps: int = 12
+    timeout_sec: int = 180
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest) -> JSONResponse:
+    """Run a prompt through the surrogate CLI inside the container, return result.
+    Used by remote Surrogate CLI clients (Mac/laptop) to delegate to Hermes brain on HF.
+    """
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="prompt is empty")
+
+    surrogate_bin = HOME / ".claude/bin/surrogate"
+    if not surrogate_bin.exists():
+        raise HTTPException(status_code=503, detail="surrogate CLI not installed in container")
+
+    proc = await asyncio.create_subprocess_exec(
+        str(surrogate_bin), "-p", req.prompt, "--max-steps", str(req.max_steps),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=req.cwd or str(HOME),
+        env={**os.environ, "TERM": "dumb"},
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=req.timeout_sec)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise HTTPException(status_code=504, detail=f"timeout after {req.timeout_sec}s")
+
+    out = stdout.decode("utf-8", errors="replace")
+    err = stderr.decode("utf-8", errors="replace")
+
+    # Strip ANSI for clean JSON output
+    import re as _re
+    out = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", out)
+    out = _re.sub(r"\x1b\[\?[0-9]+[hl]", "", out)
+    out = "\n".join(l for l in out.splitlines() if not l.strip().startswith(("⏺", "●"))).strip()
+
+    return JSONResponse({
+        "ok": proc.returncode == 0,
+        "rc": proc.returncode or 0,
+        "response": out or "(empty)",
+        "stderr_tail": err[-1000:] if err else "",
+    })
 
 
 @app.get("/logs")
