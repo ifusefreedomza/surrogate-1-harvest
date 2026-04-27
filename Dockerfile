@@ -5,7 +5,7 @@ FROM python:3.12-slim
 # ── System deps ──────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash curl wget git ca-certificates jq sqlite3 redis-server \
-    ripgrep fswatch procps net-tools \
+    ripgrep fswatch procps net-tools zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Ollama (CPU build for ARM/x86) ──────────────────────────────────────────
