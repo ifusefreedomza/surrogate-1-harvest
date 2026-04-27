@@ -25,9 +25,10 @@ WORKDIR /home/hermes
 COPY --chown=hermes:hermes requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# ── Copy Surrogate scripts + config skeleton ────────────────────────────────
+# ── Copy Surrogate scripts + agents + config skeleton ──────────────────────
 # Surrogate's home: ~/.surrogate/bin/  (separate from Claude Code's ~/.claude/)
 COPY --chown=hermes:hermes bin/ /home/hermes/.surrogate/bin/
+COPY --chown=hermes:hermes agents/ /home/hermes/.surrogate/agents/
 COPY --chown=hermes:hermes config/ /home/hermes/.hermes/config/
 COPY --chown=hermes:hermes start.sh /home/hermes/start.sh
 RUN chmod +x /home/hermes/.surrogate/bin/*.sh /home/hermes/start.sh

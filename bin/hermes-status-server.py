@@ -49,9 +49,13 @@ def _episodes_count() -> int:
 
 
 def _daemons() -> int:
+    """Count all surrogate daemons by name pattern."""
     try:
         out = subprocess.run(
-            ["pgrep", "-fc", "discord-bot|surrogate-dev|scrape-loop|hermes-cron|ollama"],
+            ["pgrep", "-fc",
+             "discord-bot|surrogate-dev|scrape-loop|scrape-daemon|"
+             "agentic-crawler|skill-synthesis|hermes-cron|ollama|"
+             "domain-scrape|qwen-coder|auto-orchestrate"],
             capture_output=True, text=True, timeout=2,
         )
         return int(out.stdout.strip() or 0)
@@ -59,22 +63,105 @@ def _daemons() -> int:
         return 0
 
 
+def _episodes_count_v2() -> int:
+    """Count training pairs (current source of truth) instead of legacy episodes."""
+    pairs = HOME / ".surrogate/training-pairs.jsonl"
+    try:
+        if pairs.exists():
+            return sum(1 for _ in pairs.open())
+    except Exception:
+        pass
+    # Fallback to old episodes path
+    return _episodes_count()
+
+
+def _training_pairs_count() -> int:
+    pairs = HOME / ".surrogate/training-pairs.jsonl"
+    try:
+        if pairs.exists():
+            return sum(1 for _ in pairs.open())
+    except Exception:
+        pass
+    return 0
+
+
+def _skill_count() -> int:
+    skills = HOME / ".surrogate/skills"
+    if not skills.exists():
+        return 0
+    return len(list(skills.glob("**/SKILL.md")))
+
+
+def _agentic_visited() -> int:
+    db = HOME / ".surrogate/state/agentic-frontier.db"
+    try:
+        with sqlite3.connect(str(db), timeout=2) as c:
+            return c.execute("SELECT COUNT(*) FROM visited").fetchone()[0]
+    except Exception:
+        return 0
+
+
+def _ollama_models() -> list[str]:
+    try:
+        import urllib.request, json as _json
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as r:
+            return [m["name"] for m in _json.load(r).get("models", [])]
+    except Exception:
+        return []
+
+
 @app.get("/")
 def root() -> JSONResponse:
     return JSONResponse({
-        "service": "hermes",
+        "service": "surrogate",
         "model": "axentx/surrogate-1",
         "status": "ok",
         "ts": datetime.now(timezone.utc).isoformat(),
         "ledger_repos": _ledger_count(),
-        "episodes": _episodes_count(),
+        "training_pairs": _training_pairs_count(),
+        "agentic_urls_visited": _agentic_visited(),
+        "skills_synthesized": _skill_count(),
+        "episodes": _episodes_count_v2(),
         "daemons_running": _daemons(),
+        "models_loaded": _ollama_models(),
     })
 
 
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/logs/{name}")
+def log_tail(name: str, lines: int = 100) -> PlainTextResponse:
+    """Tail a specific log file. Allowlist for security."""
+    allowed = {
+        "boot", "cron", "scrape-continuous", "scrape-daemon",
+        "agentic-crawler", "skill-synthesis", "auto-orchestrate-loop",
+        "training-push", "ollama", "discord-bot", "surrogate-research-loop",
+        "domain-scrape", "qwen-coder", "git-clone", "git-pull",
+    }
+    if name not in allowed:
+        raise HTTPException(404, f"Unknown log: {name}. Allowed: {sorted(allowed)}")
+    log_file = LOG_DIR / f"{name}.log"
+    if not log_file.exists():
+        return PlainTextResponse(f"# {name}.log does not exist yet", status_code=200)
+    try:
+        out = subprocess.run(
+            ["tail", "-n", str(min(lines, 500)), str(log_file)],
+            capture_output=True, text=True, timeout=5,
+        )
+        return PlainTextResponse(out.stdout)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/logs-list")
+def logs_list() -> dict:
+    """List all available log files."""
+    if not LOG_DIR.exists():
+        return {"logs": []}
+    return {"logs": sorted(p.stem for p in LOG_DIR.glob("*.log"))}
 
 
 class ChatRequest(BaseModel):

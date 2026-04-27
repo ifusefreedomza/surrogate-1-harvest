@@ -63,6 +63,14 @@ DATASETS = [
     ("meta-math/MetaMathQA",                        "MIT",         "metamath",            "query-resp",            50000),
     # ── Helpfulness preferences ─────────────────────────────────────────────
     ("Anthropic/hh-rlhf",                           "MIT",         "hh-rlhf",             "chosen-rejected",       40000),
+    # ── SWE-Bench: real GitHub issue → patch (agent training gold) ──────────
+    ("SWE-bench/SWE-smith-trajectories",            "MIT",         "swe-smith-traj",      "swe-trajectory",         5017),
+    ("SWE-bench/SWE-smith",                         "MIT",         "swe-smith-tasks",     "swe-instance",          50000),
+    ("ByteDance-Seed/Multi-SWE-bench",              "CC0",         "multi-swe-bench",     "swe-instance",          15000),
+    # ── PR review with diff + label + reasoning ─────────────────────────────
+    ("TuringEnterprises/CRAVE",                     "MIT",         "crave-pr-review",     "pr-review",              1200),
+    # ── Single-statement bug fixes (real-world Java) ────────────────────────
+    ("zirui3/ManySStuBs4J-instructions-v0",         "CC-BY-4.0",   "manysstubs-bugfix",   "instr-resp",            50000),
 ]
 
 # 1. Existing axentx hashes for dedup
@@ -157,6 +165,29 @@ with open(out_path, "w") as out:
                 elif schema == "system-question-resp":    # dolphin-coder
                     prompt = f"{str(row.get('system_prompt','')).strip()}\n\n{str(row.get('question','')).strip()}"
                     response = str(row.get("response",""))
+                elif schema == "swe-trajectory":          # SWE-smith-trajectories — agent traces
+                    msgs = row.get("messages") or []
+                    if not msgs or not row.get("resolved", False): continue
+                    # Use first user msg as prompt, full assistant trace as response
+                    user_msgs = [m for m in msgs if m.get("role") == "user"]
+                    asst_msgs = [m for m in msgs if m.get("role") == "assistant"]
+                    if not user_msgs or not asst_msgs: continue
+                    prompt = str(user_msgs[0].get("content",""))[:6000]
+                    # Concat all assistant turns to capture full agent reasoning
+                    response = "\n\n".join(str(m.get("content","")) for m in asst_msgs)[:12000]
+                elif schema == "swe-instance":            # SWE-smith / Multi-SWE-bench
+                    repo = row.get("repo", "")
+                    issue = str(row.get("problem_statement") or row.get("issue") or row.get("text",""))[:3000]
+                    patch = str(row.get("patch") or row.get("model_patch") or row.get("fix",""))[:8000]
+                    if not issue or not patch: continue
+                    prompt = f"Repo: {repo}\n\nIssue:\n{issue}\n\nGenerate a patch (unified diff) that resolves this issue."
+                    response = patch
+                elif schema == "pr-review":               # CRAVE
+                    diff = str(row.get("diff",""))[:6000]
+                    label = row.get("label", "")
+                    reasoning = str(row.get("reasoning") or row.get("explanation",""))[:3000]
+                    prompt = f"Review this PR diff:\n```diff\n{diff}\n```\nClassify (approve/request-changes/reject) and explain."
+                    response = f"Verdict: {label}\n\nReasoning: {reasoning}"
                 else:
                     continue
 

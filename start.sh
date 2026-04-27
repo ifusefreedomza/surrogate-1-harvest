@@ -147,24 +147,37 @@ sleep 6
 # Note: user asked about "qwen3.6" — that's a community general-chat fine-tune,
 # not coder-specialized. qwen3-coder is the official Qwen team flagship for SDLC tasks.
 if ! ollama list 2>/dev/null | grep -q "qwen3-coder"; then
-    echo "[$(date +%H:%M:%S)] pulling qwen3-coder:30b-a3b (~16 GB MoE, primary brain)" >> "$LOG_DIR/boot.log"
+    echo "[$(date +%H:%M:%S)] pulling qwen3-coder:30b-a3b (~16 GB MoE, primary brain — SWE-bench 60%+)" >> "$LOG_DIR/boot.log"
     nohup ollama pull qwen3-coder:30b-a3b-instruct-q4_K_M > "$LOG_DIR/ollama-pull-coder.log" 2>&1 &
+fi
+if ! ollama list 2>/dev/null | grep -q "devstral"; then
+    echo "[$(date +%H:%M:%S)] pulling devstral:24b (~14 GB, Mistral SWE-agent — 53.6% SWE-bench)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull devstral:24b > "$LOG_DIR/ollama-pull-devstral.log" 2>&1 &
 fi
 if ! ollama list 2>/dev/null | grep -q "qwen2.5-coder:14b"; then
     echo "[$(date +%H:%M:%S)] pulling qwen2.5-coder:14b (~9 GB, fallback brain)" >> "$LOG_DIR/boot.log"
     nohup ollama pull qwen2.5-coder:14b-instruct-q4_K_M > "$LOG_DIR/ollama-pull-fallback.log" 2>&1 &
 fi
-if ! ollama list 2>/dev/null | grep -q "gemma4:e4b"; then
-    echo "[$(date +%H:%M:%S)] pulling gemma4:e4b (light triage)" >> "$LOG_DIR/boot.log"
-    nohup ollama pull gemma4:e4b > "$LOG_DIR/ollama-pull-light.log" 2>&1 &
+if ! ollama list 2>/dev/null | grep -q "yi-coder"; then
+    echo "[$(date +%H:%M:%S)] pulling yi-coder:9b (~6 GB, 128k context — long file analysis)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull yi-coder:9b > "$LOG_DIR/ollama-pull-yicoder.log" 2>&1 &
+fi
+if ! ollama list 2>/dev/null | grep -q "nomic-embed-text"; then
+    echo "[$(date +%H:%M:%S)] pulling nomic-embed-text (~270MB, RAG embeddings)" >> "$LOG_DIR/boot.log"
+    nohup ollama pull nomic-embed-text > "$LOG_DIR/ollama-pull-embed.log" 2>&1 &
 fi
 
-# ── 6. Discord bot (background) ─────────────────────────────────────────────
-# Trace stays OFF — never re-enable past secrets section.
+# ── 6. Discord bot (only if egress to discord.com is reachable) ────────────
+# HF Spaces free tier may block egress to discord.com — bot would crash-loop.
+# Pre-flight check: if discord.com unreachable, skip bot, use webhook-only.
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
-    set -a; source ~/.hermes/.env 2>/dev/null; set +a
-    nohup python ~/.surrogate/bin/hermes-discord-bot.py >> "$LOG_DIR/discord-bot.log" 2>&1 &
-    echo "[$(date +%H:%M:%S)] discord bot started"
+    if curl -sS -o /dev/null -w "%{http_code}" --max-time 6 https://discord.com 2>/dev/null | grep -qE "^(200|301|302|307|308)$"; then
+        set -a; source ~/.hermes/.env 2>/dev/null; set +a
+        nohup python ~/.surrogate/bin/hermes-discord-bot.py >> "$LOG_DIR/discord-bot.log" 2>&1 &
+        echo "[$(date +%H:%M:%S)] discord bot started (gateway reachable)"
+    else
+        echo "[$(date +%H:%M:%S)] discord.com unreachable — skipping bot, using webhook-only" >> "$LOG_DIR/boot.log"
+    fi
 fi
 
 # ── 7a. Continuous scrape daemon (parallel 8 workers, ~10s cool-down) ──────

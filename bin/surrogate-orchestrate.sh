@@ -173,6 +173,17 @@ if os.environ.get("GROQ_KEY"):
     ladder.append(("groq:llama-70b",
         lambda: oai_compatible("https://api.groq.com/openai/v1/chat/completions",
                                "llama-3.3-70b-versatile", os.environ["GROQ_KEY"])))
+# HF Inference Providers (zero-markup access to Together/Fireworks/Cerebras/etc.)
+hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+if hf_token:
+    for hf_model in ["Qwen/Qwen3-Coder-480B-A35B-Instruct",
+                     "Qwen/Qwen3-235B-A22B-Instruct-2507",
+                     "openai/gpt-oss-120b",
+                     "deepseek-ai/DeepSeek-V3.1-Terminus"]:
+        ladder.append((f"hf-router:{hf_model.split('/')[-1][:30]}",
+            lambda m=hf_model: oai_compatible(
+                "https://router.huggingface.co/v1/chat/completions",
+                m, hf_token)))
 # Gemini free tier (rotate two keys)
 if os.environ.get("GEMINI_KEY"):
     ladder.append(("gemini-1", lambda: gemini(os.environ["GEMINI_KEY"])))
