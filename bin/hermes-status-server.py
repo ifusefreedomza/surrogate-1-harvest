@@ -145,5 +145,8 @@ def logs() -> PlainTextResponse:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860, log_level="info")
+    import os, sys, uvicorn
+    port = int(os.environ.get("PORT", "7860"))
+    print(f"[hermes] starting uvicorn on 0.0.0.0:{port}", flush=True)
+    print(f"[hermes] python={sys.version.split()[0]} home={HOME}", flush=True)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", access_log=True)
