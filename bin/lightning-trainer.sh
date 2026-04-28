@@ -105,7 +105,8 @@ args=TrainingArguments(
     logging_steps=20, save_strategy="steps", save_steps=200, save_total_limit=2,
     warmup_ratio=0.03, lr_scheduler_type="cosine", report_to="none",
     push_to_hub=True, hub_model_id=HUB_ID, hub_strategy="every_save",
-    hub_token=os.environ.get("HF_TOKEN"))
+    hub_token=os.environ.get("HF_TOKEN"),
+    hub_private_repo=True)    # PRIVATE — proprietary axentx asset
 collator=DataCollatorForSeq2Seq(tok,padding=True,return_tensors="pt")
 Trainer(model=model,args=args,train_dataset=tokenized,data_collator=collator,
     tokenizer=tok).train()

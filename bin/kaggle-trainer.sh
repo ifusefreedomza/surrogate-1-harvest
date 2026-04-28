@@ -206,6 +206,7 @@ args = TrainingArguments(
     hub_model_id=HUB_ID,
     hub_strategy="every_save",
     hub_token=os.environ.get("HF_TOKEN"),
+    hub_private_repo=True,    # PRIVATE — only axentx can download Surrogate-1 model
 )
 collator = DataCollatorForSeq2Seq(tok, padding=True, return_tensors="pt")
 trainer = Trainer(model=model, args=args, train_dataset=tokenized,
