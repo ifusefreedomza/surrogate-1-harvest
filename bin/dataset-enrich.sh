@@ -136,6 +136,32 @@ DATASETS = [
     ("nvidia/Nemotron-Agentic-v1",                  "CC-BY-4.0",   "nemotron-agentic",    "tools-messages-reasoning",100000),
     # ── OpenAPI completion ──────────────────────────────────────────────────
     ("BohdanPetryshyn/openapi-completion-refined",  "MIT",         "openapi-refined",     "instr-resp",              990),
+    # ════════════════════════════════════════════════════════════════════════
+    # MEGA-MIXES — pre-aggregated, deduped, already-curated by big labs.
+    # ════════════════════════════════════════════════════════════════════════
+    # GOLD: 1M Apache-2.0 mix of GPT-4 generated + filtered (Teknium curated)
+    ("teknium/OpenHermes-2.5",                      "Apache",      "openhermes-2.5",      "conversations",        500000),
+    # SmolLM team curated 1M+ instruction mix (very recent, high-quality filter)
+    ("HuggingFaceTB/smoltalk",                      "Apache",      "smoltalk",            "messages",             500000),
+    ("HuggingFaceTB/smoltalk2",                     "Apache",      "smoltalk2",           "messages",             500000),
+    # 25M synthetic textbooks — broad CS/math/science (Apache)
+    ("HuggingFaceTB/cosmopedia-v2",                 "Apache",      "cosmopedia",          "instr-resp",          1000000),
+    # 3.2M code instruction MIT — larger than Magicoder
+    ("Replete-AI/code_bagel",                       "MIT",         "code-bagel",          "instr-resp",           500000),
+    # 9.8M Apache CoT mix from Alpaca family
+    ("QingyiSi/Alpaca-CoT",                         "Apache",      "alpaca-cot",          "instr-resp",           500000),
+    # WizardLM evolved instructions (196K Apache, top-quality)
+    ("WizardLMTeam/WizardLM_evol_instruct_V2_196k", "Apache",      "wizardlm-evol-v2",    "conversations",        196000),
+    # Magpie-Pro multi-turn (300K MIT)
+    ("Magpie-Align/Magpie-Pro-MT-300K-v0.1",        "MIT",         "magpie-pro-mt",       "conversations",        300000),
+    # ORPO/DPO mix (40K MIT — preference signal)
+    ("mlabonne/orpo-dpo-mix-40k",                   "MIT",         "orpo-dpo-mix",        "chosen-rejected",       40000),
+    # Microsoft Orca math (200K MIT)
+    ("microsoft/orca-math-word-problems-200k",      "MIT",         "orca-math",           "query-resp",           200000),
+    # Open Assistant v1 (161K Apache, multi-turn human-vetted)
+    ("OpenAssistant/oasst1",                        "Apache",      "oasst1",              "messages",             100000),
+    # UltraTextbooks (5.5M Apache long-form learning)
+    ("Locutusque/UltraTextbooks",                   "Apache",      "ultratextbooks",      "instr-resp",           500000),
     # NOTE: SWE-bench/SWE-bench_Verified + bigcode/bigcodebench RESERVED AS EVAL ONLY.
 ]
 

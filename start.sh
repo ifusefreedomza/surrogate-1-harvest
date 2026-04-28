@@ -252,8 +252,9 @@ while true; do
     [[ $((M % 60)) -eq 0 ]] && bash ~/.surrogate/bin/scrape-keyword-tuner.sh >> "$LOG" 2>&1 &
     # Every 6 hours: research-loop (discover new features from competitors/papers)
     [[ $((M % 360)) -eq 30 ]] && bash ~/.surrogate/bin/surrogate-research-loop.sh >> "$LOG" 2>&1 &
-    # Every 12 hours: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
-    [[ $((M % 720)) -eq 60 ]] && bash ~/.surrogate/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
+    # Every 4 hours: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
+    # (was 12h — accelerated to drain the 80-dataset queue faster)
+    [[ $((M % 240)) -eq 30 ]] && bash ~/.surrogate/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
     # Every 15 min: self-ingest training-pairs into FTS index (closes the self-improvement loop)
     [[ $((M % 15)) -eq 0 ]] && bash ~/.surrogate/bin/surrogate-self-ingest.sh >> "$LOG" 2>&1 &
     # Every 30 min: synthetic data generation (REWORK→APPROVE DPO + distilabel rewrite)
