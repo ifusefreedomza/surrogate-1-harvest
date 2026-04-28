@@ -110,6 +110,7 @@ ROLE: $role
 $prompt
 ${RESEARCH_CONTEXT}
 ${PRD_CONTEXT}
+${REPO_CONTEXT}
 
 === Working context ===
 CWD: $(pwd)
@@ -164,7 +165,30 @@ def oai_compatible(url, model, key, extra_headers=None):
         return d["choices"][0]["message"]["content"]
 
 ladder = []
-# Free, fast (Groq + Cerebras serve Llama 3.3 70B at ~500 tok/s)
+# Long-context priority: when prompt > 20k chars, prefer 128k+ context models
+prompt_len = len(prompt)
+needs_long_ctx = prompt_len > 20000
+
+# HF Inference Providers PRIORITIZED for code work (highest quality + long context)
+# Qwen3-Coder-480B = 262k native context, best OSS coder
+# DeepSeek-V3.1-Terminus = 164k context
+# GPT-OSS-120B = 128k context
+hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+if hf_token:
+    # Long-context capable models first (priority order matters — first that succeeds is used)
+    long_ctx_models = [
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",   # 262k context, top OSS coder
+        "deepseek-ai/DeepSeek-V3.1-Terminus",    # 164k context
+        "openai/gpt-oss-120b",                   # 128k context
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",    # 128k context
+    ]
+    for hf_model in long_ctx_models:
+        ladder.append((f"hf-router:{hf_model.split('/')[-1][:30]}",
+            lambda m=hf_model: oai_compatible(
+                "https://router.huggingface.co/v1/chat/completions",
+                m, hf_token)))
+
+# Free, fast (Groq + Cerebras serve Llama 3.3 70B at ~500 tok/s) — 128k context
 if os.environ.get("CEREBRAS_KEY"):
     ladder.append(("cerebras:llama-70b",
         lambda: oai_compatible("https://api.cerebras.ai/v1/chat/completions",
@@ -173,17 +197,6 @@ if os.environ.get("GROQ_KEY"):
     ladder.append(("groq:llama-70b",
         lambda: oai_compatible("https://api.groq.com/openai/v1/chat/completions",
                                "llama-3.3-70b-versatile", os.environ["GROQ_KEY"])))
-# HF Inference Providers (zero-markup access to Together/Fireworks/Cerebras/etc.)
-hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-if hf_token:
-    for hf_model in ["Qwen/Qwen3-Coder-480B-A35B-Instruct",
-                     "Qwen/Qwen3-235B-A22B-Instruct-2507",
-                     "openai/gpt-oss-120b",
-                     "deepseek-ai/DeepSeek-V3.1-Terminus"]:
-        ladder.append((f"hf-router:{hf_model.split('/')[-1][:30]}",
-            lambda m=hf_model: oai_compatible(
-                "https://router.huggingface.co/v1/chat/completions",
-                m, hf_token)))
 # Gemini free tier (rotate two keys)
 if os.environ.get("GEMINI_KEY"):
     ladder.append(("gemini-1", lambda: gemini(os.environ["GEMINI_KEY"])))
