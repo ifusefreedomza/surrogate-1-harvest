@@ -218,3 +218,4 @@ kaggle kernels push -p "$WORK_DIR" 2>&1 | tee -a "$LOG"
 
 # kernels push schedules a run; status check later
 echo "[$(date +%H:%M:%S)] kaggle-trainer cycle done — notebook submitted" | tee -a "$LOG"
+# kaggle-trainer kick: KAGGLE_USERNAME=longlum confirmed via auth probe 2026-04-28T20:03:51Z
