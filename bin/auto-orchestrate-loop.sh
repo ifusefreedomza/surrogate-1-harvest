@@ -47,7 +47,21 @@ PROJECTS = [p for p in PROJECTS if (p/'.git').exists()]
 if not PROJECTS:
     print("{}"); exit()
 
-random.shuffle(PROJECTS)
+# ROUND-ROBIN across projects (instead of random.shuffle which kept hitting same repo).
+# Persistent counter at ~/.surrogate/state/orchestrate-project-cursor — increments each run.
+# Result: every 6 runs covers all 6 axentx repos evenly.
+cursor_file = Path.home() / '.surrogate/state/orchestrate-project-cursor'
+cursor_file.parent.mkdir(parents=True, exist_ok=True)
+try:
+    cursor = int(cursor_file.read_text().strip())
+except Exception:
+    cursor = 0
+PROJECTS = sorted(PROJECTS, key=lambda p: p.name)  # stable order
+cursor = cursor % len(PROJECTS)
+# Rotate so current cursor's project is first
+PROJECTS = PROJECTS[cursor:] + PROJECTS[:cursor]
+cursor_file.write_text(str((cursor + 1) % len(PROJECTS)))
+
 for proj in PROJECTS:
     cmd = ['rg', '--no-heading', '-n', '-m', '5',
            '--type', 'py', '--type', 'ts', '--type', 'go', '--type', 'sh',

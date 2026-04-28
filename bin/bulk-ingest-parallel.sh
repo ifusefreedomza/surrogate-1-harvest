@@ -10,8 +10,8 @@ set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 LOG="$HOME/.surrogate/logs/bulk-ingest-parallel.log"
 mkdir -p "$(dirname "$LOG")"
 
-NUM_SHARDS="${INGEST_SHARDS:-4}"
-SHARD_COOLDOWN="${SHARD_COOLDOWN:-300}"  # 5 min between shard cycles
+NUM_SHARDS="${INGEST_SHARDS:-8}"
+SHARD_COOLDOWN="${SHARD_COOLDOWN:-180}"  # 3 min between shard cycles (was 5)
 
 echo "[$(date +%H:%M:%S)] bulk-ingest-parallel start (shards=$NUM_SHARDS)" | tee -a "$LOG"
 
@@ -28,9 +28,9 @@ shard_loop() {
     done
 }
 
-# Stagger startup 30s apart to avoid all hitting HF API simultaneously
+# Stagger startup 15s apart (was 30s) to spin up faster
 for i in $(seq 0 $((NUM_SHARDS - 1))); do
     shard_loop "$i" "$NUM_SHARDS" &
-    sleep 30
+    sleep 15
 done
 wait
