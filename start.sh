@@ -238,11 +238,15 @@ nohup bash ~/.surrogate/bin/hf-dataset-discoverer.sh > "$LOG_DIR/hf-dataset-disc
 echo "[$(date +%H:%M:%S)] hf-dataset-discoverer started (continuous mega-mix hunt)" >> "$LOG_DIR/boot.log"
 
 # ── 7e. CONTINUOUS auto-orchestrate (4 parallel workers, no cron gap) ───────
-# Replaces M%20 cron — was 'fire once every 20 min'. Now: each of 4 workers
-# loops forever, dev work happens nonstop. Picks different TODO/FIXME each iter,
-# uses existing LOCK_DIR for dedup. Result: ~10-20× more orchestrate cycles/day.
 nohup bash ~/.surrogate/bin/auto-orchestrate-continuous.sh > "$LOG_DIR/auto-orchestrate-continuous.log" 2>&1 &
 echo "[$(date +%H:%M:%S)] auto-orchestrate-continuous started (4 parallel workers, never sleeps)" >> "$LOG_DIR/boot.log"
+
+# ── 7f. PARALLEL BULK INGEST (4 shards drain 293M-cap DATASETS list concurrently) ──
+# Was: single-thread enrich = drains 293M caps in ~weeks
+# Now: 4 shards by slug-hash = ~4× faster. Each shard streams 1/4 of datasets,
+# central dedup ensures no overlap.
+nohup bash ~/.surrogate/bin/bulk-ingest-parallel.sh > "$LOG_DIR/bulk-ingest-parallel.log" 2>&1 &
+echo "[$(date +%H:%M:%S)] bulk-ingest-parallel started (4 shards, 293M total cap)" >> "$LOG_DIR/boot.log"
 
 # ── 7c. Skill-synthesis daemon (extract patterns from cloned repos → skills) ─
 nohup bash ~/.surrogate/bin/skill-synthesis-daemon.sh > "$LOG_DIR/skill-synthesis.log" 2>&1 &

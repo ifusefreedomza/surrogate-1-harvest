@@ -23,15 +23,23 @@ mkdir -p "$WORK" "$(dirname "$LOG")"
 
 echo "[$(date +%H:%M:%S)] dataset enrich start" | tee "$LOG"
 
-python3 <<'PYEOF' 2>&1 | tee -a "$LOG"
+SHARD_ID="${SHARD_ID:-0}"
+SHARD_TOTAL="${SHARD_TOTAL:-1}"
+
+SHARD_ID="$SHARD_ID" SHARD_TOTAL="$SHARD_TOTAL" python3 <<'PYEOF' 2>&1 | tee -a "$LOG"
 from huggingface_hub import HfApi
 from pathlib import Path
 from datasets import load_dataset
-import hashlib, json, time
+import hashlib, json, time, os
 
 WORK = Path("/Users/Ashira/.hermes/workspace/dataset-enrich")
 WORK.mkdir(parents=True, exist_ok=True)
 api = HfApi()
+
+# Sharding: each parallel worker handles a subset of DATASETS
+SHARD_ID = int(os.environ.get("SHARD_ID", 0))
+SHARD_TOTAL = int(os.environ.get("SHARD_TOTAL", 1))
+print(f"[shard {SHARD_ID}/{SHARD_TOTAL}] start", flush=True)
 
 # (id, license, slug, schema_hint, per_dataset_cap)
 DATASETS = [
@@ -166,27 +174,27 @@ DATASETS = [
     # TRILLION-SCALE PRETRAIN CORPORA (caps bumped 5-10× per user feedback)
     # ════════════════════════════════════════════════════════════════════════
     # FineWeb-Edu — 1.3T tokens education-filtered (HIGH SIGNAL/NOISE)
-    ("HuggingFaceFW/fineweb-edu",                   "ODC-By",      "fineweb-edu",         "web-text",            5000000),
+    ("HuggingFaceFW/fineweb-edu",                   "ODC-By",      "fineweb-edu",         "web-text",           20000000),
     # SmolLM team's filtered web subset (CC0/Apache-tier, smaller=faster ingest)
-    ("HuggingFaceTB/smollm-corpus",                 "Apache",      "smollm-corpus",       "web-text",            3000000),
+    ("HuggingFaceTB/smollm-corpus",                 "Apache",      "smollm-corpus",       "web-text",           15000000),
     # Cosmopedia full (synthetic textbooks 25M Apache — bumped 1M\u219210M)
-    ("HuggingFaceTB/cosmopedia-v2",                 "Apache",      "cosmopedia",          "instr-resp",         10000000),
+    ("HuggingFaceTB/cosmopedia-v2",                 "Apache",      "cosmopedia",          "instr-resp",         25000000),
     # Dolma v1.7 — 3T tokens AllenAI mixed (ODC-By, bumped 500K\u21923M)
-    ("allenai/dolma",                               "ODC-By",      "dolma",               "web-text",            3000000),
+    ("allenai/dolma",                               "ODC-By",      "dolma",               "web-text",           15000000),
     # The Pile uncopyrighted (MIT, 627GB, bumped 500K\u21922M)
-    ("monology/pile-uncopyrighted",                 "MIT",         "pile-uncopyrighted",  "web-text",            2000000),
+    ("monology/pile-uncopyrighted",                 "MIT",         "pile-uncopyrighted",  "web-text",           10000000),
     # RedPajama V2 web (Apache, 30T tokens, bumped 500K\u21923M)
-    ("togethercomputer/RedPajama-Data-V2",          "Apache",      "redpajama-v2",        "web-text",            3000000),
+    ("togethercomputer/RedPajama-Data-V2",          "Apache",      "redpajama-v2",        "web-text",           15000000),
     # SlimPajama-6B (DKYoon Apache, filtered subset of RedPajama, easier ingest)
-    ("DKYoon/SlimPajama-6B",                        "Apache",      "slim-pajama-6b",      "web-text",            2000000),
+    ("DKYoon/SlimPajama-6B",                        "Apache",      "slim-pajama-6b",      "web-text",           10000000),
     # bigcode StarCoder data (250B tokens, bumped 500K\u21923M)
-    ("bigcode/starcoderdata",                       "Permissive",  "starcoder-data",      "code-only-permissive", 3000000),
+    ("bigcode/starcoderdata",                       "Permissive",  "starcoder-data",      "code-only-permissive",15000000),
     # GitHub code clean (Apache, bumped 500K\u21923M)
-    ("codeparrot/github-code-clean",                "Apache",      "github-code-clean",   "code-only-permissive", 3000000),
+    ("codeparrot/github-code-clean",                "Apache",      "github-code-clean",   "code-only-permissive",15000000),
     # The Stack dedup (filtered code, bumped 500K\u21925M)
-    ("bigcode/the-stack-dedup",                     "Permissive",  "the-stack-dedup",     "code-only-permissive", 5000000),
+    ("bigcode/the-stack-dedup",                     "Permissive",  "the-stack-dedup",     "code-only-permissive",20000000),
     # Common Pile v0.1 (8TB EleutherAI, bumped 500K\u21922M)
-    ("common-pile/common-pile-2",                   "Permissive",  "common-pile-2",       "web-text",            2000000),
+    ("common-pile/common-pile-2",                   "Permissive",  "common-pile-2",       "web-text",           10000000),
     # ════════════════════════════════════════════════════════════════════════
     # PRE-CURATED MASSIVE SFT MIXES (specifically instruction-tuned, high quality)
     # ════════════════════════════════════════════════════════════════════════
@@ -213,19 +221,19 @@ DATASETS = [
     # MORE TRILLION-SCALE PRETRAIN — every public source we missed
     # ════════════════════════════════════════════════════════════════════════
     # FineWeb FULL (15T tokens, not just edu — broader)
-    ("HuggingFaceFW/fineweb",                       "ODC-By",      "fineweb-full",        "web-text",            5000000),
+    ("HuggingFaceFW/fineweb",                       "ODC-By",      "fineweb-full",        "web-text",           20000000),
     # FineWeb-2 multilingual
-    ("HuggingFaceFW/fineweb-2",                     "ODC-By",      "fineweb-2",           "web-text",            3000000),
+    ("HuggingFaceFW/fineweb-2",                     "ODC-By",      "fineweb-2",           "web-text",           15000000),
     # DCLM-baseline (4T tokens, mlfoundations heavily filtered)
-    ("mlfoundations/dclm-baseline-1.0",             "Apache",      "dclm-baseline",       "web-text",            5000000),
+    ("mlfoundations/dclm-baseline-1.0",             "Apache",      "dclm-baseline",       "web-text",           20000000),
     # CulturaX (6.3T multilingual ODC-By, replaces stale mc4)
-    ("uonlp/CulturaX",                              "ODC-By",      "culturax",            "web-text",            3000000),
+    ("uonlp/CulturaX",                              "ODC-By",      "culturax",            "web-text",           15000000),
     # FineMath (math-filtered web — Apache)
     ("HuggingFaceTB/finemath",                      "Apache",      "finemath",            "instr-resp",          2000000),
     # FinePDFs (PDF books extracted — Apache)
-    ("HuggingFaceTB/finepdfs",                      "Apache",      "finepdfs",            "web-text",            2000000),
+    ("HuggingFaceTB/finepdfs",                      "Apache",      "finepdfs",            "web-text",           10000000),
     # C4 (Apache T5 training corpus)
-    ("allenai/c4",                                  "ODC-By",      "c4",                  "web-text",            2000000),
+    ("allenai/c4",                                  "ODC-By",      "c4",                  "web-text",           10000000),
     # The Stack v1 dedup (3TB, Apache filterable)
     ("bigcode/the-stack",                           "Permissive",  "the-stack-v1",        "code-only-permissive",3000000),
     # GitHub Jupyter notebooks (Apache)
@@ -373,12 +381,18 @@ for path in [Path.home() / 'axentx/surrogate/data/training-jsonl',
 print(f"  {len(existing_hashes):,} existing hashes loaded", flush=True)
 
 # 2. Pull each dataset, normalize per schema, dedup
+# SHARDING: when multiple bulk-ingest workers run in parallel, each handles
+# only its slug-hash bucket. SHARD_TOTAL=4 → each worker pulls 1/4 of DATASETS.
 new_pairs_total = 0
-out_path = WORK / f"merged-public-dedup-{time.strftime('%Y%m%d')}.jsonl"
+out_path = WORK / f"merged-public-dedup-{time.strftime('%Y%m%d')}-shard{SHARD_ID}.jsonl"
 
 with open(out_path, "w") as out:
     for ds_id, license_, slug, schema, cap in DATASETS:
-        print(f"\n--- {ds_id} ({license_}, schema={schema}, cap={cap}) ---", flush=True)
+        # Sharding filter
+        slug_bucket = int(hashlib.md5(slug.encode()).hexdigest()[:8], 16) % SHARD_TOTAL
+        if slug_bucket != SHARD_ID:
+            continue
+        print(f"\n--- [shard {SHARD_ID}] {ds_id} ({license_}, schema={schema}, cap={cap:,}) ---", flush=True)
         try:
             t0 = time.time()
             ds = load_dataset(ds_id, split="train", streaming=True)
