@@ -33,19 +33,44 @@ class DedupStore:
     def _connection(cls) -> sqlite3.Connection:
         if cls._conn is None:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=NORMAL")
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS seen_hashes (
-                    hash    TEXT PRIMARY KEY,
-                    source  TEXT NOT NULL,
-                    ts      INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_seen_source ON seen_hashes(source);
-                CREATE INDEX IF NOT EXISTS idx_seen_ts ON seen_hashes(ts);
-            """)
-            cls._conn = c
+            # Auto-recover from corruption (16 parallel shards can corrupt SQLite)
+            for attempt in range(3):
+                try:
+                    c = sqlite3.connect(str(DB_PATH), check_same_thread=False,
+                                         timeout=30, isolation_level=None)
+                    c.execute("PRAGMA journal_mode=WAL")
+                    c.execute("PRAGMA synchronous=NORMAL")
+                    c.execute("PRAGMA busy_timeout=30000")  # 30s wait on lock
+                    c.execute("PRAGMA wal_autocheckpoint=1000")
+                    c.executescript("""
+                        CREATE TABLE IF NOT EXISTS seen_hashes (
+                            hash    TEXT PRIMARY KEY,
+                            source  TEXT NOT NULL,
+                            ts      INTEGER NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_seen_source ON seen_hashes(source);
+                        CREATE INDEX IF NOT EXISTS idx_seen_ts ON seen_hashes(ts);
+                    """)
+                    # Smoke-test the table
+                    c.execute("SELECT 1 FROM seen_hashes LIMIT 1").fetchall()
+                    cls._conn = c
+                    break
+                except sqlite3.DatabaseError as e:
+                    if "malformed" in str(e).lower() or "corrupt" in str(e).lower():
+                        # Backup + reset corrupted DB
+                        import time as _t
+                        backup = DB_PATH.with_suffix(f".corrupt-{int(_t.time())}.bak")
+                        try:
+                            DB_PATH.rename(backup)
+                            for ext in ("-wal", "-shm"):
+                                p = DB_PATH.with_suffix(DB_PATH.suffix + ext)
+                                if p.exists():
+                                    p.unlink()
+                        except Exception:
+                            pass
+                        if attempt < 2:
+                            continue
+                    raise
         return cls._conn
 
     @classmethod

@@ -197,7 +197,6 @@ class TokenPool:
         """Pick token with most remaining quota; if all exhausted, return None."""
         with self.lock:
             now = time.time()
-            # Reset expired counters
             for s in self.states:
                 if s.reset_at and now > s.reset_at:
                     s.remaining = 5000
@@ -205,12 +204,21 @@ class TokenPool:
             ready = [s for s in self.states if s.remaining > 50]
             if not ready:
                 return None
-            # Round-robin among ready, weighted by remaining
             ready.sort(key=lambda s: (-s.remaining, s.last_used))
             picked = ready[0]
             picked.last_used = now
-            picked.remaining -= 1   # optimistic; refined from response headers
+            picked.remaining -= 1
             return picked
+
+    def wait_for_any_reset(self) -> int:
+        """Sleep until earliest token reset (instead of 60s naive sleep)."""
+        with self.lock:
+            now = time.time()
+            resets = [s.reset_at - int(now) for s in self.states if s.reset_at and s.reset_at > now]
+            if not resets:
+                return 60
+            wait = min(resets) + 5  # buffer
+            return min(wait, 3600)  # cap 1h
 
     def update_from_headers(self, state: TokenState, headers: dict) -> None:
         with self.lock:
@@ -233,10 +241,9 @@ def gh_get(url: str, pool: TokenPool, retries: int = 2) -> tuple[dict | list | N
     for attempt in range(retries + 1):
         state = pool.acquire()
         if state is None:
-            soonest = pool.soonest_reset()
-            wait = max(60, int(soonest - time.time()))
-            log(f"  all tokens exhausted, sleeping {wait}s until reset")
-            time.sleep(min(wait, 600))
+            wait = pool.wait_for_any_reset()
+            log(f"  all tokens exhausted — sleep {wait}s until earliest reset")
+            time.sleep(wait)
             continue
         req = urllib.request.Request(url, headers={
             "Accept": "application/vnd.github+json",

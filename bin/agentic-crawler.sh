@@ -114,6 +114,14 @@ try:
     with urllib.request.urlopen(req, timeout=20) as r:
         body = r.read(2_000_000).decode("utf-8", errors="ignore")
         status = r.status
+        ctype = (r.headers.get("Content-Type") or "").lower()
+    # Skip non-HTML responses (DNS records, raw zone files, etc. were crashing parser)
+    if "html" not in ctype and "<html" not in body[:1000].lower():
+        con.execute("INSERT OR REPLACE INTO visited VALUES (?,?,?,?,?,?,?)",
+                    (url, int(time.time()), status, "", domain, depth, len(body)))
+        con.commit()
+        print(f"  [skip-non-html] {ctype[:30]} {url[:80]}")
+        sys.exit(0)
 except Exception as e:
     con.execute("INSERT OR REPLACE INTO visited VALUES (?,?,?,?,?,?,?)",
                 (url, int(time.time()), -1, None, domain, depth, 0))
