@@ -85,7 +85,13 @@ if [[ -d "$DATA" ]] && [[ -w "$DATA" ]]; then
     # User feedback: 'ตั้งแต่ 7 โมงเช้า แต่ data ไม่เพิ่ม' — cron M%60 may have
     # been mis-aligned with rebuilds. Force one enrich run on every boot.
     nohup bash "${HOME}/.surrogate/bin/dataset-enrich.sh" >> "$LOG_DIR/dataset-enrich.log" 2>&1 &
-    echo "[$(date +%H:%M:%S)] boot-time dataset-enrich kicked off (96 datasets)" >> "$LOG_DIR/boot.log"
+    echo "[$(date +%H:%M:%S)] boot-time dataset-enrich kicked off" >> "$LOG_DIR/boot.log"
+
+    # ── BOOT-TIME kaggle-trainer kickoff (don't wait for 90-min cron) ─────
+    # Submits the LoRA training notebook to Kaggle T4 immediately on every
+    # Space boot. Kaggle CLI gracefully handles 'already running' state.
+    nohup bash "${HOME}/.surrogate/bin/kaggle-trainer.sh" >> "$LOG_DIR/kaggle-trainer.log" 2>&1 &
+    echo "[$(date +%H:%M:%S)] boot-time kaggle-trainer kicked off" >> "$LOG_DIR/boot.log"
 
     echo "[$(date +%H:%M:%S)] persistent /data linked (state, logs, memory, skills, sessions, workspace, ollama, training-pairs)" >> "$LOG_DIR/boot.log"
 else
@@ -337,10 +343,12 @@ while true; do
     # Cerebras/Groq → +80 specific job-description-style search terms each).
     # Discoverer auto-uses the expanded list on its next cycle.
     [[ $((M % 1440)) -eq 360 ]] && python3 ~/.surrogate/bin/expand-role-keywords.py >> "$LOG_DIR/expand-role-keywords.log" 2>&1 &
-    # Every 6 hours: kick a Kaggle T4 LoRA training run on the latest dataset
+    # Every 90 min: kick a Kaggle T4 LoRA training run on the latest dataset
     # slice. Free Kaggle quota = 30 hr/week per account; one full run = 4-6 hr,
-    # so 4 runs/week comfortable. Notebook self-uploads adapter to HF hub.
-    [[ $((M % 360)) -eq 30 ]] && bash ~/.surrogate/bin/kaggle-trainer.sh >> "$LOG_DIR/kaggle-trainer.log" 2>&1 &
+    # so we DO want to keep submitting — Kaggle queues if 1 already running,
+    # auto-cancels older if 5+ pending. With shorter interval we keep the
+    # GPU pipeline saturated.
+    [[ $((M % 90)) -eq 5 ]] && bash ~/.surrogate/bin/kaggle-trainer.sh >> "$LOG_DIR/kaggle-trainer.log" 2>&1 &
     sleep 60
 done
 CRONSH
