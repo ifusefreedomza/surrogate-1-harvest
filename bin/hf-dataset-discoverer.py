@@ -61,9 +61,60 @@ def _load_role_queries() -> list[tuple[str, str]]:
     return queries
 
 
+def _auto_keywords_from_db() -> list[tuple[str, str]]:
+    """Pull self-discovered keywords from auto_keywords table (research feedback)."""
+    try:
+        with sqlite3.connect(DB) as c:
+            rows = c.execute(
+                "SELECT keyword FROM auto_keywords ORDER BY uses ASC, RANDOM() LIMIT 100"
+            ).fetchall()
+        return [(r[0], "auto-keyword") for r in rows]
+    except Exception:
+        return []
+
+
 def get_queries() -> list[tuple[str, str]]:
-    """Reload on each call so role-knowledge-map.json edits take effect immediately."""
-    return _load_role_queries()
+    """Reload on each call so role-knowledge-map.json edits take effect immediately.
+    Plus auto-keywords harvested from successful integrations (self-expanding)."""
+    return _load_role_queries() + _auto_keywords_from_db()
+
+
+def harvest_keywords(meta: dict, ds_id: str) -> int:
+    """Extract candidate keywords from dataset metadata + tags. Adds NEW ones to
+    auto_keywords table for future cycle queries (research feedback loop)."""
+    candidates: set[str] = set()
+    # From tags (most reliable signal — curator-chosen)
+    for tag in (meta.get("tags") or [])[:30]:
+        t = str(tag).lower()
+        # Skip generic noise
+        if not t or len(t) < 4 or len(t) > 60:
+            continue
+        if t.startswith(("license:", "size_", "language:", "format:", "task_categories:")):
+            continue
+        # Strip namespace prefix
+        if ":" in t:
+            t = t.split(":", 1)[1]
+        if 4 <= len(t) <= 60 and not t.startswith("http"):
+            candidates.add(t)
+    # From description (top noun-phrase-ish)
+    desc = (meta.get("description") or "").lower()
+    for m in re.finditer(r"\b([a-z][a-z0-9]{2,}(?:[-\s][a-z][a-z0-9]{2,}){0,2})\b", desc):
+        phrase = m.group(1).strip()
+        if 8 <= len(phrase) <= 50 and not phrase.startswith(("the ", "a ", "an ", "is ", "of ")):
+            candidates.add(phrase)
+    # Persist new ones
+    added = 0
+    if candidates:
+        with sqlite3.connect(DB) as c:
+            for kw in list(candidates)[:20]:  # cap per dataset
+                cur = c.execute(
+                    "INSERT OR IGNORE INTO auto_keywords (keyword, seed_from, added_ts) VALUES (?,?,?)",
+                    (kw, ds_id, int(time.time()))
+                )
+                if cur.rowcount > 0:
+                    added += 1
+            c.commit()
+    return added
 
 
 def log(msg: str):
@@ -75,9 +126,12 @@ def log(msg: str):
 
 
 def init_db():
+    """Schema-safe init: create tables FIRST, migrate columns, THEN indexes
+    (fixes 'no such column' error when upgrading from v1 schema)."""
     DB.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB) as c:
-        c.executescript("""
+        # Step 1: base tables (no role_tag — match v1 schema for compatibility)
+        c.execute("""
         CREATE TABLE IF NOT EXISTS dataset_seen (
             ds_id          TEXT PRIMARY KEY,
             evaluated_ts   INTEGER NOT NULL,
@@ -87,26 +141,37 @@ def init_db():
             schema_branch  TEXT,
             cap            INTEGER,
             slug           TEXT,
-            verdict        TEXT,
-            role_tag       TEXT          -- which role's query found this
-        );
-        CREATE INDEX IF NOT EXISTS idx_verdict ON dataset_seen(verdict);
-        CREATE INDEX IF NOT EXISTS idx_score ON dataset_seen(quality_score DESC);
-        CREATE INDEX IF NOT EXISTS idx_role ON dataset_seen(role_tag);
-
+            verdict        TEXT
+        )""")
+        c.execute("""
         CREATE TABLE IF NOT EXISTS query_history (
             query        TEXT PRIMARY KEY,
             role_tag     TEXT,
             last_run_ts  INTEGER NOT NULL,
             results_count INTEGER DEFAULT 0,
             new_finds    INTEGER DEFAULT 0
-        );
+        )""")
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS auto_keywords (
+            keyword     TEXT PRIMARY KEY,
+            seed_from   TEXT,        -- ds_id that surfaced this keyword
+            added_ts    INTEGER NOT NULL,
+            uses        INTEGER DEFAULT 0
+        )""")
+        # Step 2: migrate — add role_tag column to existing dataset_seen if missing
+        cols = {row[1] for row in c.execute("PRAGMA table_info(dataset_seen)").fetchall()}
+        if "role_tag" not in cols:
+            try:
+                c.execute("ALTER TABLE dataset_seen ADD COLUMN role_tag TEXT")
+            except sqlite3.OperationalError:
+                pass
+        # Step 3: indexes (safe now — role_tag exists)
+        c.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_verdict ON dataset_seen(verdict);
+        CREATE INDEX IF NOT EXISTS idx_score ON dataset_seen(quality_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_role ON dataset_seen(role_tag);
         """)
-        # Migration: add role_tag column if upgrading from v1 schema
-        try:
-            c.execute("ALTER TABLE dataset_seen ADD COLUMN role_tag TEXT")
-        except sqlite3.OperationalError:
-            pass  # already exists
+        c.commit()
 
 
 def hf_get(url: str, timeout: int = 15):
@@ -277,60 +342,68 @@ def discover_cycle() -> dict:
     new_queued = 0
     new_rejected = 0
     seen_this_cycle = 0
+    new_keywords = 0
     role_finds: dict[str, int] = {}
 
     queries = get_queries()
-    log(f"  loaded {len(queries)} role-driven queries (covering {len(set(r for _,r in queries))} role tags)")
+    log(f"  loaded {len(queries)} queries (roles + auto-keywords + cross-cutting)")
 
+    # Each query runs across BOTH sort orders — catches downloads-leaders + recently-uploaded
     for q, role_tag in queries:
-        url = f"https://huggingface.co/api/datasets?search={urllib.parse.quote(q)}&limit=30&sort=downloads&direction=-1"
-        results = hf_get(url, timeout=15) or []
-        for ds in results:
-            ds_id = ds.get("id", "")
-            if not ds_id or is_seen(ds_id):
-                continue
-            seen_this_cycle += 1
-            verdict, entry = evaluate_one(ds_id)
-            stamp(ds_id, verdict,
-                  lic=entry.get("license", "") if entry else "",
-                  dl=entry.get("downloads", 0) if entry else 0,
-                  score=entry.get("score", 0.0) if entry else 0.0,
-                  schema=entry.get("schema", "") if entry else "",
-                  cap=entry.get("cap", 0) if entry else 0,
-                  slug=entry.get("slug", "") if entry else "",
-                  role_tag=role_tag)
-            if verdict == "integrated":
-                # Tag the entry with role for downstream training-mix balance
-                if entry: entry["role_tag"] = role_tag
-                append_dynamic(entry)
-                new_integrated += 1
-                role_finds[role_tag] = role_finds.get(role_tag, 0) + 1
-                log(f"  ✅ [{role_tag}] {ds_id} | {entry['license']} | {entry['schema']} | cap={entry['cap']:,}")
-            elif verdict.startswith("queued"):
-                new_queued += 1
-            else:
-                new_rejected += 1
-            time.sleep(0.4)  # gentle on HF API
+        for sort_order in ("downloads", "lastModified"):
+            url = (f"https://huggingface.co/api/datasets?search={urllib.parse.quote(q)}"
+                   f"&limit=50&sort={sort_order}&direction=-1")
+            results = hf_get(url, timeout=15) or []
+            for ds in results:
+                ds_id = ds.get("id", "")
+                if not ds_id or is_seen(ds_id):
+                    continue
+                seen_this_cycle += 1
+                verdict, entry = evaluate_one(ds_id)
+                stamp(ds_id, verdict,
+                      lic=entry.get("license", "") if entry else "",
+                      dl=entry.get("downloads", 0) if entry else 0,
+                      score=entry.get("score", 0.0) if entry else 0.0,
+                      schema=entry.get("schema", "") if entry else "",
+                      cap=entry.get("cap", 0) if entry else 0,
+                      slug=entry.get("slug", "") if entry else "",
+                      role_tag=role_tag)
+                if verdict == "integrated":
+                    if entry: entry["role_tag"] = role_tag
+                    append_dynamic(entry)
+                    new_integrated += 1
+                    role_finds[role_tag] = role_finds.get(role_tag, 0) + 1
+                    # Self-expanding: harvest keywords from successful finds
+                    meta_for_kw = hf_get(f"https://huggingface.co/api/datasets/{ds_id}?full=true") or {}
+                    nk = harvest_keywords(meta_for_kw, ds_id)
+                    new_keywords += nk
+                    log(f"  ✅ [{role_tag}] {ds_id} | {entry['license']} | {entry['schema']} | cap={entry['cap']:,} | +{nk}kw")
+                elif verdict.startswith("queued"):
+                    new_queued += 1
+                else:
+                    new_rejected += 1
+                time.sleep(0.3)  # gentle on HF API
 
-        # Update query history for this query
-        try:
-            with sqlite3.connect(DB) as c:
-                c.execute(
-                    "INSERT OR REPLACE INTO query_history (query, role_tag, last_run_ts, results_count, new_finds) "
-                    "VALUES (?,?,?,?, COALESCE((SELECT new_finds FROM query_history WHERE query=?),0) + ?)",
-                    (q, role_tag, int(time.time()), len(results), q, new_integrated)
-                )
-        except Exception:
-            pass
+            # Update query history for this query+sort combo
+            try:
+                with sqlite3.connect(DB) as c:
+                    c.execute(
+                        "INSERT OR REPLACE INTO query_history (query, role_tag, last_run_ts, results_count, new_finds) "
+                        "VALUES (?,?,?,?, COALESCE((SELECT new_finds FROM query_history WHERE query=?),0) + ?)",
+                        (f"{q}#{sort_order}", role_tag, int(time.time()), len(results), q, new_integrated)
+                    )
+            except Exception:
+                pass
 
     return {"evaluated": seen_this_cycle, "integrated": new_integrated,
             "queued": new_queued, "rejected": new_rejected,
-            "by_role": role_finds}
+            "new_auto_keywords": new_keywords, "by_role": role_finds}
 
 
 def main():
     init_db()
-    log(f"start | hf_token={'set' if HF_TOKEN else 'MISSING'} | queries={len(QUERIES)}")
+    n_queries = len(get_queries())
+    log(f"start | hf_token={'set' if HF_TOKEN else 'MISSING'} | queries={n_queries} (× 2 sort orders = {n_queries * 2} pages/cycle)")
 
     while True:
         t0 = time.time()
@@ -343,9 +416,10 @@ def main():
         # Cumulative stats from DB
         with sqlite3.connect(DB) as c:
             verdicts = dict(c.execute("SELECT verdict, COUNT(*) FROM dataset_seen GROUP BY verdict").fetchall())
-        log(f"=== cycle done in {elapsed}s | this_cycle={stats} | cumulative={verdicts}")
-        # Sleep 30 min between cycles
-        time.sleep(1800)
+            kw_total = c.execute("SELECT COUNT(*) FROM auto_keywords").fetchone()[0]
+        log(f"=== cycle {elapsed}s | this={stats} | cum={verdicts} | auto_keywords={kw_total}")
+        # Faster cycles: 10 min (was 30) — datasets upload daily, react fast
+        time.sleep(600)
 
 
 if __name__ == "__main__":

@@ -186,8 +186,35 @@ while true; do
     # Pop top-scoring URLs from frontier
     BATCH=$(sqlite3 "$DB" "SELECT url||'|'||depth FROM frontier ORDER BY score DESC, added_ts ASC LIMIT $BATCH_SIZE;")
     if [[ -z "$BATCH" ]]; then
-        echo "[$(date +%H:%M:%S)] frontier empty — sleeping 60s" >> "$LOG"
-        sleep 60
+        echo "[$(date +%H:%M:%S)] frontier empty — re-seeding from awesome lists" >> "$LOG"
+        # Re-seed: re-fetch awesome lists to pick up new repos added since last seed
+        python3 -c "
+import sqlite3, time
+con = sqlite3.connect('$DB')
+# Drop visited stamps for awesome list pages so they get re-fetched
+seeds = [
+    'https://github.com/trending?since=daily',
+    'https://github.com/trending/python?since=daily',
+    'https://github.com/trending/typescript?since=daily',
+    'https://github.com/sindresorhus/awesome',
+    'https://github.com/e2b-dev/awesome-ai-agents',
+    'https://github.com/Hannibal046/Awesome-LLM',
+    'https://github.com/punkpeye/awesome-mcp-servers',
+    'https://github.com/dastergon/awesome-sre',
+    'https://huggingface.co/models?sort=trending',
+    'https://huggingface.co/datasets?sort=trending',
+    'https://arxiv.org/list/cs.AI/recent',
+    'https://arxiv.org/list/cs.SE/recent',
+    'https://news.ycombinator.com/',
+]
+for url in seeds:
+    con.execute('DELETE FROM visited WHERE url=?', (url,))
+    con.execute('INSERT OR IGNORE INTO frontier(url,score,depth,parent,added_ts) VALUES (?,?,?,NULL,?)',
+                (url, 0.95, 0, int(time.time())))
+con.commit()
+print(f'  re-seeded {len(seeds)} URLs')
+"
+        sleep 30
         continue
     fi
 
