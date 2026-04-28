@@ -67,6 +67,12 @@ if [[ -d "$DATA" ]] && [[ -w "$DATA" ]]; then
         nohup bash "${HOME}/.surrogate/bin/dedup-bootstrap.sh" > "$LOG_DIR/dedup-bootstrap.log" 2>&1 &
     fi
 
+    # ── BOOT-TIME enrich kickoff (trigger immediate pull, don't wait for cron) ──
+    # User feedback: 'ตั้งแต่ 7 โมงเช้า แต่ data ไม่เพิ่ม' — cron M%60 may have
+    # been mis-aligned with rebuilds. Force one enrich run on every boot.
+    nohup bash "${HOME}/.surrogate/bin/dataset-enrich.sh" >> "$LOG_DIR/dataset-enrich.log" 2>&1 &
+    echo "[$(date +%H:%M:%S)] boot-time dataset-enrich kicked off (96 datasets)" >> "$LOG_DIR/boot.log"
+
     echo "[$(date +%H:%M:%S)] persistent /data linked (state, logs, memory, skills, sessions, workspace, ollama, training-pairs)" >> "$LOG_DIR/boot.log"
 else
     echo "[$(date +%H:%M:%S)] WARN: /data not writable — running ephemeral!" >> "$LOG_DIR/boot.log"
@@ -260,9 +266,9 @@ while true; do
     [[ $((M % 60)) -eq 0 ]] && bash ~/.surrogate/bin/scrape-keyword-tuner.sh >> "$LOG" 2>&1 &
     # Every 6 hours: research-loop (discover new features from competitors/papers)
     [[ $((M % 360)) -eq 30 ]] && bash ~/.surrogate/bin/surrogate-research-loop.sh >> "$LOG" 2>&1 &
-    # Every 4 hours: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
-    # (was 12h — accelerated to drain the 80-dataset queue faster)
-    [[ $((M % 240)) -eq 30 ]] && bash ~/.surrogate/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
+    # Every 60 min: dataset enrich (pulls fresh public datasets, dedups, uploads to HF)
+    # (was 4h — accelerated to drain 96-dataset queue ASAP per user request)
+    [[ $((M % 60)) -eq 5 ]] && bash ~/.surrogate/bin/dataset-enrich.sh >> "$LOG" 2>&1 &
     # Every 15 min: self-ingest training-pairs into FTS index (closes the self-improvement loop)
     [[ $((M % 15)) -eq 0 ]] && bash ~/.surrogate/bin/surrogate-self-ingest.sh >> "$LOG" 2>&1 &
     # Every 30 min: synthetic data generation (REWORK→APPROVE DPO + distilabel rewrite)

@@ -163,6 +163,23 @@ DATASETS = [
     # UltraTextbooks (5.5M Apache long-form learning)
     ("Locutusque/UltraTextbooks",                   "Apache",      "ultratextbooks",      "instr-resp",           500000),
     # ════════════════════════════════════════════════════════════════════════
+    # TRILLION-SCALE PRETRAIN CORPORA (sample heavily — others use these to train)
+    # ════════════════════════════════════════════════════════════════════════
+    # FineWeb-Edu — 1.3T tokens education-filtered web (ODC-By Apache-equivalent)
+    ("HuggingFaceFW/fineweb-edu",                   "ODC-By",      "fineweb-edu",         "instr-resp",          1000000),
+    # Dolma v1.7 — 3T tokens AllenAI mixed (ODC-By)
+    ("allenai/dolma",                               "ODC-By",      "dolma",               "instr-resp",           500000),
+    # The Pile uncopyrighted (MIT, 627GB) — diverse pretrain corpus
+    ("monology/pile-uncopyrighted",                 "MIT",         "pile-uncopyrighted",  "instr-resp",           500000),
+    # RedPajama V2 web (Apache, 30T tokens) — sample 500K
+    ("togethercomputer/RedPajama-Data-V2",          "Apache",      "redpajama-v2",        "instr-resp",           500000),
+    # bigcode StarCoder data (250B tokens) — already filtered code
+    ("bigcode/starcoderdata",                       "Permissive",  "starcoder-data",      "instr-resp",           500000),
+    # GitHub code clean (Apache 1B+ rows)
+    ("codeparrot/github-code-clean",                "Apache",      "github-code-clean",   "instr-resp",           500000),
+    # Common Pile v0.1 (8TB EleutherAI, multi-source permissive)
+    ("common-pile/common-pile-2",                   "Permissive",  "common-pile-2",       "messages",             500000),
+    # ════════════════════════════════════════════════════════════════════════
     # ROUND 4 — fill remaining gaps (long-context, unit-test gen, more agents)
     # ════════════════════════════════════════════════════════════════════════
     # NVIDIA Nemotron mega-mix (7.2M, recent Aug 2025, 5 langs)
