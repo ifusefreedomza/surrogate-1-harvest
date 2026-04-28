@@ -187,6 +187,19 @@ DATASETS = [
     # ByteDance-Seed/Multi-SWE-bench + bigcode/bigcodebench = EVAL HOLDOUT, never train.
 ]
 
+# ── DYNAMIC LIST — agentic discoverer adds new finds here (no manual edit) ──
+# hf-dataset-discoverer.py runs every 30 min, evaluates new HF datasets,
+# auto-appends high-quality permissive picks to ~/.surrogate/state/dynamic-datasets.json
+DYNAMIC_PATH = Path.home() / ".surrogate/state/dynamic-datasets.json"
+if DYNAMIC_PATH.exists():
+    try:
+        dyn = json.loads(DYNAMIC_PATH.read_text() or "[]")
+        for d in dyn:
+            DATASETS.append((d["id"], d["license"], d["slug"], d["schema"], d["cap"]))
+        print(f"  📦 dynamic discoverer: +{len(dyn)} datasets auto-added", flush=True)
+    except Exception as e:
+        print(f"  ⚠ dynamic list parse err: {e}", flush=True)
+
 # 1. Use CENTRAL dedup store (single source of truth across all writers)
 import sys as _sys
 _sys.path.insert(0, str(Path.home() / ".surrogate/bin/lib"))

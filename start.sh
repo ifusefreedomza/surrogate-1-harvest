@@ -224,11 +224,15 @@ nohup bash ~/.surrogate/bin/agentic-crawler.sh 6 > "$LOG_DIR/agentic-crawler.log
 echo "[$(date +%H:%M:%S)] agentic crawler started (parallel=6)" >> "$LOG_DIR/boot.log"
 
 # ── 7b2. GitHub-specific agentic crawler (4 PATs × 5000/h = 20K req/h) ─────
-# Central SQLite frontier — every visited repo/PR/issue stamped, no dedup with
-# any other agent. Specializes in: trending, topic search, repo deep-dive,
-# closed-issue→PR fix pairs, merged-PR review pairs, release notes.
 nohup bash ~/.surrogate/bin/github-agentic-crawler.sh > "$LOG_DIR/github-agentic-crawler.log" 2>&1 &
 echo "[$(date +%H:%M:%S)] github-agentic-crawler started (token pool maximized)" >> "$LOG_DIR/boot.log"
+
+# ── 7b3. HF Dataset Discoverer (continuous mega-mix hunt) ───────────────────
+# Searches HF Hub across 70+ topic queries every 30 min. Filters license + scores
+# quality. Auto-adds high-confidence permissive picks to dynamic-datasets.json.
+# dataset-enrich reads dynamic list on top of static 89 → infinitely growing corpus.
+nohup bash ~/.surrogate/bin/hf-dataset-discoverer.sh > "$LOG_DIR/hf-dataset-discoverer.log" 2>&1 &
+echo "[$(date +%H:%M:%S)] hf-dataset-discoverer started (continuous mega-mix hunt)" >> "$LOG_DIR/boot.log"
 
 # ── 7c. Skill-synthesis daemon (extract patterns from cloned repos → skills) ─
 nohup bash ~/.surrogate/bin/skill-synthesis-daemon.sh > "$LOG_DIR/skill-synthesis.log" 2>&1 &

@@ -166,7 +166,7 @@ def log_tail(name: str, lines: int = 100) -> PlainTextResponse:
         "auto-orchestrate-loop", "training-push", "ollama", "discord-bot",
         "hermes-discord-bot", "surrogate-research-loop", "surrogate-research-apply",
         "surrogate-dev-loop", "domain-scrape-loop", "github-domain-scrape",
-        "qwen-coder", "git-clone", "git-pull", "redis", "dedup-bootstrap", "github-agentic-crawler", "ollama-pull-granite", "synthetic-data", "self-ingest", "scrape-sre-postmortems", "refresh-cve-feed",
+        "qwen-coder", "git-clone", "git-pull", "redis", "hf-dataset-discoverer", "dedup-bootstrap", "github-agentic-crawler", "ollama-pull-granite", "synthetic-data", "self-ingest", "scrape-sre-postmortems", "refresh-cve-feed",
         "ollama-pull-coder", "ollama-pull-devstral", "ollama-pull-fallback",
         "ollama-pull-yicoder", "ollama-pull-embed", "ollama-pull-light",
     }
