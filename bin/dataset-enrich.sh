@@ -32,7 +32,7 @@ from pathlib import Path
 from datasets import load_dataset
 import hashlib, json, time, os
 
-WORK = Path("/Users/Ashira/.hermes/workspace/dataset-enrich")
+WORK = Path.home() / ".hermes/workspace/dataset-enrich"
 WORK.mkdir(parents=True, exist_ok=True)
 api = HfApi()
 

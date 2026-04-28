@@ -16,7 +16,7 @@ DB = str(Path.home() / ".surrogate/index.db")
 OLLAMA = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "granite4:7b-a1b-h"
 
-AXENTX = Path("/Users/Ashira/axentx")
+AXENTX = Path.home() / "axentx"
 PROJECTS = ["Costinel", "Vanguard", "arkship", "surrogate", "workio"]
 
 

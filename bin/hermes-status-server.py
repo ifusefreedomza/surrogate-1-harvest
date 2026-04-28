@@ -200,6 +200,50 @@ class ChatRequest(BaseModel):
     timeout_sec: int = 180
 
 
+
+
+@app.get("/selftest")
+def selftest() -> dict:
+    """Verify HF Space environment — catches Mac-mindset bugs early.
+    Tests: critical imports, hardcoded path leaks, key file existence."""
+    results = {"ok": True, "checks": {}}
+    
+    # 1. Required imports
+    for mod in ["datasets", "huggingface_hub", "pyarrow", "numpy", "sqlite3"]:
+        try:
+            __import__(mod)
+            results["checks"][f"import_{mod}"] = True
+        except ImportError as e:
+            results["checks"][f"import_{mod}"] = False
+            results["ok"] = False
+    
+    # 2. Critical paths exist (HF Space side)
+    for path_str in ["~/.surrogate/bin", "~/.surrogate/state", "~/.surrogate/logs"]:
+        p = Path(os.path.expanduser(path_str))
+        results["checks"][f"path_{path_str}"] = p.exists()
+        if not p.exists():
+            results["ok"] = False
+    
+    # 3. No Mac path leaks in active scripts
+    bad_paths = []
+    for f in (HOME / ".surrogate/bin").rglob("*.sh"):
+        try:
+            text_content = f.read_text(errors="ignore")
+            if "/Users/Ashira" in text_content:
+                bad_paths.append(f.name)
+        except Exception:
+            pass
+    results["checks"]["no_mac_paths"] = len(bad_paths) == 0
+    if bad_paths:
+        results["ok"] = False
+        results["mac_path_leaks"] = bad_paths[:10]
+    
+    # 4. HF token present
+    results["checks"]["hf_token_set"] = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
+    
+    return results
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest) -> JSONResponse:
     """Run a prompt through the surrogate CLI inside the container, return result.
