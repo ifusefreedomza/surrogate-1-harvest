@@ -87,6 +87,32 @@ DATASETS = [
     ("CohereForAI/aya_dataset",                     "Apache",      "aya-multi",           "instr-resp",           150000),
     # ── Code corpus (legal alternative to the-stack) ─────────────────────────
     ("iidai/codenet",                               "CDLA",        "ibm-codenet",         "code-only",            200000),
+    # ── NIST cybersecurity full corpus (530K CC0 — closes compliance gap) ────
+    ("ethanolivertroy/nist-cybersecurity-training", "CC0",         "nist-cyber",          "messages",             100000),
+    # ── DevSecOps depth (Fenrir + Trendyol explicitly tagged for IR/threat) ─
+    ("AlicanKiraz0/Cybersecurity-Dataset-Fenrir-v2.1","Apache",    "fenrir-cyber",        "system-user-assistant", 99870),
+    ("Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset","Apache","trendyol-cyber","instr-resp",         53202),
+    # ── Incident-Response playbooks (NIST SP 800-61 structure) ───────────────
+    ("darkknight25/Incident_Response_Playbook_Dataset","MIT",      "ir-playbooks",        "ir-playbook",             175),
+    # ── Real agent trajectories (OpenHands SWE-rebench) ─────────────────────
+    ("nebius/SWE-rebench-openhands-trajectories",   "CC-BY-4.0",   "swe-rebench-traj",    "swe-trajectory",        50000),
+    ("nebius/SWE-rebench",                          "CC-BY-4.0",   "swe-rebench-tasks",   "swe-instance",          27878),
+    # ── Reasoning chains (R1-distilled CoT) ──────────────────────────────────
+    ("nvidia/OpenCodeReasoning",                    "CC-BY-4.0",   "opencode-reasoning",  "instr-resp",           100000),
+    ("open-r1/codeforces-cots",                     "CC-BY-4.0",   "codeforces-cots",     "instr-resp",            50000),
+    ("open-r1/OpenR1-Math-220k",                    "Apache",      "openr1-math",         "instr-resp",            50000),
+    ("open-thoughts/OpenThoughts-114k",             "Apache",      "open-thoughts",       "instr-resp",           100000),
+    # ── Preference / DPO under pressure (good vs bad reasoning) ──────────────
+    ("nvidia/HelpSteer3",                           "CC-BY-4.0",   "helpsteer3",          "helpsteer-pref",        40476),
+    ("argilla/ultrafeedback-binarized-preferences-cleaned","MIT", "uf-cleaned",          "chosen-rejected",       60917),
+    ("OpenAssistant/oasst2",                        "Apache",      "oasst2",              "messages",              80000),
+    # ── Cloud security misconfigs + chaos engineering ────────────────────────
+    ("darkknight25/Cloud_Vulnerabilities",          "MIT",         "cloud-vulns",         "cloud-misconfig",        1200),
+    ("AYI-NEDJIMI/cloud-security-en",               "Apache",      "cloud-sec-en",        "cloud-misconfig",         230),
+    ("ddjain/krkn-dataset",                         "MIT",         "krkn-chaos",          "instr-resp",             1000),
+    # ── Linux/bash command knowledge ─────────────────────────────────────────
+    ("mecha-org/linux-command-dataset",             "Apache",      "linux-commands",      "instr-resp",             8669),
+    # NOTE: SWE-bench/SWE-bench_Verified RESERVED AS EVAL ONLY — never include here.
 ]
 
 # 1. Existing axentx hashes for dedup
@@ -226,8 +252,46 @@ with open(out_path, "w") as out:
                     if len(code) < 80: continue
                     prompt = f"Explain what this {lang} code does:\n```{lang}\n{code}\n```"
                     response = f"[Code sample from IBM CodeNet — pending LLM-generated explanation]"
-                    # Skip writing — placeholder responses pollute training data
-                    continue
+                    continue  # Skip — placeholder responses pollute training
+                elif schema == "ir-playbook":             # NIST SP 800-61 IR playbooks
+                    title = str(row.get("title") or row.get("incident_type") or row.get("name",""))
+                    phases = row.get("phases") or row.get("response_phases") or {}
+                    mitre = row.get("mitre_attack") or row.get("tactics") or []
+                    if not title: continue
+                    prompt = f"How should an incident response team handle a {title} incident? Provide a NIST SP 800-61 playbook."
+                    response_parts = [f"# {title}"]
+                    if mitre:
+                        response_parts.append(f"\n## MITRE ATT&CK tactics: {', '.join(str(m) for m in mitre[:6])}")
+                    if isinstance(phases, dict):
+                        for phase, content in phases.items():
+                            response_parts.append(f"\n## {phase}\n{content}")
+                    elif isinstance(phases, list):
+                        for p in phases:
+                            response_parts.append(f"\n## {p}")
+                    response = "\n".join(response_parts)
+                elif schema == "helpsteer-pref":          # NVIDIA HelpSteer3 preference + reasoning
+                    user_msg = str(row.get("context") or row.get("prompt",""))[:4000]
+                    chosen = str(row.get("response_a") or row.get("chosen",""))[:6000]
+                    rejected = str(row.get("response_b") or row.get("rejected",""))[:6000]
+                    pref = row.get("individual_preference", {}) or {}
+                    reasoning = ""
+                    if isinstance(pref, dict):
+                        reasoning = str(pref.get("reasoning",""))[:2000]
+                    if not user_msg or not chosen: continue
+                    prompt = user_msg
+                    response = chosen
+                    if reasoning:
+                        response += f"\n\n[Why this is preferred: {reasoning}]"
+                elif schema == "cloud-misconfig":         # darkknight25 / AYI-NEDJIMI cloud security
+                    cloud = str(row.get("cloud_provider") or row.get("provider") or "Cloud")
+                    issue = str(row.get("vulnerability") or row.get("misconfiguration") or row.get("issue",""))[:2000]
+                    mitig = str(row.get("mitigation") or row.get("fix") or row.get("remediation",""))[:3000]
+                    cis = row.get("cis_benchmark") or row.get("cis_ref","")
+                    if not issue or not mitig: continue
+                    prompt = f"In {cloud}, how do you remediate this misconfiguration: {issue}"
+                    response = f"**Mitigation**: {mitig}"
+                    if cis:
+                        response += f"\n\n**CIS Benchmark reference**: {cis}"
                 else:
                     continue
 
