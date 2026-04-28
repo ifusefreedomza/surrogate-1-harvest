@@ -60,24 +60,45 @@ hf_auth = os.environ["HF_AUTH"]
 
 try:
     from huggingface_hub import HfApi
+    from huggingface_hub.errors import HfHubHTTPError
 except ImportError:
     print(f"[{time.strftime('%H:%M:%S')}] ERR: huggingface_hub not installed")
     sys.exit(2)
 
 api = HfApi(token=hf_auth)
-try:
-    api.upload_file(
-        path_or_fileobj=slice_path,
-        path_in_repo=remote,
-        repo_id="axentx/surrogate-1-training-pairs",
-        repo_type="dataset",
-        commit_message=f"chunk: +{n_lines} pairs ({time.strftime('%H:%M')})",
-    )
-    print(f"[{time.strftime('%H:%M:%S')}] ✅ uploaded → {remote}")
-    sys.exit(0)
-except Exception as e:
-    print(f"[{time.strftime('%H:%M:%S')}] ❌ {type(e).__name__}: {str(e)[:300]}")
-    sys.exit(3)
+
+# 5-attempt retry with exponential backoff. The repo has a hard 128
+# commits/hr ceiling that gets hit when 40+ GH Actions runners + Space
+# shards all push at once. Backoff lets that ceiling drift back down.
+delays = [30, 90, 240, 600, 1200]   # 30s, 1.5m, 4m, 10m, 20m  (~36 min total worst-case)
+for attempt, delay in enumerate([0] + delays):
+    if delay:
+        time.sleep(delay)
+    try:
+        api.upload_file(
+            path_or_fileobj=slice_path,
+            path_in_repo=remote,
+            repo_id="axentx/surrogate-1-training-pairs",
+            repo_type="dataset",
+            commit_message=f"chunk: +{n_lines} pairs ({time.strftime('%H:%M')})",
+        )
+        print(f"[{time.strftime('%H:%M:%S')}] ✅ uploaded → {remote} (attempt {attempt + 1})")
+        sys.exit(0)
+    except HfHubHTTPError as e:
+        msg = str(e)
+        if "429" in msg or "rate limit" in msg.lower() or "Too Many Requests" in msg:
+            print(f"[{time.strftime('%H:%M:%S')}] ⚠ 429 on attempt {attempt + 1}/{len(delays)+1} — backing off {delays[attempt] if attempt < len(delays) else 0}s")
+            continue
+        # Non-429 hub errors: retry once with short delay then fail
+        print(f"[{time.strftime('%H:%M:%S')}] ❌ {type(e).__name__}: {msg[:200]}")
+        if attempt < 2: continue
+        sys.exit(3)
+    except Exception as e:
+        print(f"[{time.strftime('%H:%M:%S')}] ❌ {type(e).__name__}: {str(e)[:200]}")
+        if attempt < 2: continue
+        sys.exit(3)
+print(f"[{time.strftime('%H:%M:%S')}] ❌ all retries exhausted — slice will be retried next cron tick")
+sys.exit(3)
 PYEOF
 then
     echo "$NEW_OFFSET" > "$OFFSET_FILE"

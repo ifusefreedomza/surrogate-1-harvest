@@ -17,7 +17,7 @@ set -uo pipefail
 LOG="$HOME/.surrogate/logs/gh-actions-ticker.log"
 mkdir -p "$(dirname "$LOG")"
 
-TICK_SEC="${GH_TICK_SEC:-60}"
+TICK_SEC="${GH_TICK_SEC:-120}"   # 60s -> 120s after HF rate-limit at 128 commits/hr
 
 dispatch() {
     local repo="$1"

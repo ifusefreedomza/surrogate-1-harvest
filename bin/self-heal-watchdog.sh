@@ -54,15 +54,23 @@ last_kept_age_min() {
 heal_memory() {
     local pct="$1"
     log "MEMORY ALERT pct=$pct% threshold=$MEM_THRESHOLD_PCT% — preempting OOM"
-    # Find the youngest (highest PID) dataset-enrich shard process and SIGTERM.
-    # The shard loop sleeps SHARD_COOLDOWN before respawning, so memory recovers.
-    local victim
-    victim=$(pgrep -f "dataset-enrich.sh" | sort -nr | head -1)
-    if [[ -n "$victim" ]]; then
-        log "  -> kill youngest dataset-enrich pid=$victim"
-        kill -TERM "$victim" 2>/dev/null || true
-    else
-        log "  -> no dataset-enrich processes found; nothing to preempt"
+    # Adaptive aggressiveness — kill more shards as pct gets dangerously close.
+    local kill_count=1
+    [[ "$pct" -ge 90 ]] && kill_count=2     # 90%+: kill 2 youngest
+    [[ "$pct" -ge 95 ]] && kill_count=3     # 95%+: kill 3 youngest, plus parquet-direct if running
+
+    local victims
+    victims=$(pgrep -f "dataset-enrich.sh" | sort -nr | head -"$kill_count")
+    if [[ -n "$victims" ]]; then
+        echo "$victims" | while read -r pid; do
+            log "  -> SIGTERM dataset-enrich pid=$pid"
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+    fi
+    # Also nuke parquet-direct if mem is critical — it's the second-biggest hog
+    if [[ "$pct" -ge 95 ]]; then
+        local pq=$(pgrep -f "parquet-direct-ingest.sh" | head -1)
+        [[ -n "$pq" ]] && { log "  -> CRITICAL: SIGTERM parquet-direct pid=$pq"; kill -TERM "$pq" 2>/dev/null || true; }
     fi
 }
 
