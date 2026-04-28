@@ -483,9 +483,31 @@ with open(out_path, "w") as out:
         if slug_bucket != SHARD_ID:
             continue
         print(f"\n--- [shard {SHARD_ID}] {ds_id} ({license_}, schema={schema}, cap={cap:,}) ---", flush=True)
+        # ── STAMP-AND-MOVE: query the central cursor to skip already-processed
+        # rows. Best-effort: if the endpoint is briefly down, fall through to
+        # cursor=0 (=re-pull, behavior before this change). After processing,
+        # POST advance so the next runner picks up where this one left off.
+        try:
+            import urllib.request as _urllib_req, json as _json
+            _cur_url = f"https://axentx-surrogate-1.hf.space/cursor/{slug}"
+            with _urllib_req.urlopen(_cur_url, timeout=8) as _r:
+                _cur_data = _json.loads(_r.read())
+            cursor_offset = int(_cur_data.get("offset", 0))
+        except Exception:
+            cursor_offset = 0
+        if cursor_offset:
+            print(f"  resuming from cursor offset={cursor_offset:,}", flush=True)
         try:
             t0 = time.time()
             ds = load_dataset(ds_id, split="train", streaming=True)
+            # Skip already-processed rows
+            if cursor_offset:
+                try:
+                    ds = ds.skip(cursor_offset)
+                except AttributeError:
+                    # Older datasets API: manual skip
+                    import itertools as _it
+                    ds = _it.islice(ds, cursor_offset, None)
             kept = dup = total = 0
             for row in ds:
                 total += 1
@@ -799,6 +821,18 @@ with open(out_path, "w") as out:
             elapsed = time.time() - t0
             print(f"  scanned: {total}  kept: {kept}  dedup: {dup}  ({elapsed:.0f}s)", flush=True)
             new_pairs_total += kept
+            # ── STAMP: advance the central cursor so the next runner skips
+            # what we just touched, instead of starting from row 0.
+            if total > 0:
+                try:
+                    import urllib.request as _u, json as _j
+                    _adv_url = f"https://axentx-surrogate-1.hf.space/cursor/{slug}/advance"
+                    _req = _u.Request(_adv_url, method="POST",
+                                       data=_j.dumps({"n": total}).encode(),
+                                       headers={"Content-Type": "application/json"})
+                    _u.urlopen(_req, timeout=8).read()
+                except Exception as _ce:
+                    pass  # cursor service unavailable — non-fatal
         except Exception as e:
             print(f"  ❌ {type(e).__name__}: {str(e)[:200]}", flush=True)
             continue

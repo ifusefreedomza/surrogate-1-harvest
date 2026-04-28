@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -206,6 +207,79 @@ def dynamic_datasets():
         return PlainTextResponse(p.read_text(), media_type="application/json")
     except Exception as e:
         raise HTTPException(500, f"read failed: {e}")
+
+
+# ── Cursor / stamp-and-move state (the "don't re-pull row 0 every time" fix) ──
+# Stored as ~/.surrogate/state/cursors.db (SQLite). Each row = (slug, offset, ts).
+# Runners GET /cursor/{slug} before streaming, then POST /cursor/{slug}/advance
+# with how many rows they processed. Next runner picks up where the last left off.
+import sqlite3 as _sql_for_cursor
+
+_CURSOR_DB = HOME / ".surrogate/state/cursors.db"
+
+def _cursor_conn():
+    _CURSOR_DB.parent.mkdir(parents=True, exist_ok=True)
+    c = _sql_for_cursor.connect(str(_CURSOR_DB), check_same_thread=False, timeout=10)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS cursors (
+            slug   TEXT PRIMARY KEY,
+            offset INTEGER NOT NULL DEFAULT 0,
+            ts     INTEGER NOT NULL
+        )
+    """)
+    return c
+
+
+@app.get("/cursor/{slug:path}")
+def get_cursor(slug: str):
+    """Return the next-row-to-process offset for this dataset slug.
+    Default 0 if never seen. Runners SHOULD itertools.islice(stream, offset, offset+cap)."""
+    try:
+        c = _cursor_conn()
+        row = c.execute("SELECT offset, ts FROM cursors WHERE slug = ?", (slug,)).fetchone()
+        return {"slug": slug, "offset": row[0] if row else 0, "ts": row[1] if row else 0}
+    except Exception as e:
+        raise HTTPException(500, f"cursor read: {e}")
+
+
+class CursorAdvance(BaseModel):
+    n: int
+
+
+@app.post("/cursor/{slug:path}/advance")
+def advance_cursor(slug: str, body: CursorAdvance):
+    """Advance the cursor by N rows. Atomic via SQLite UPSERT.
+    Idempotent — same call with same n yields same final offset only if
+    sequential; concurrent calls race-add (fine, dedup catches the rest)."""
+    try:
+        c = _cursor_conn()
+        ts = int(time.time())
+        c.execute("""
+            INSERT INTO cursors (slug, offset, ts) VALUES (?, ?, ?)
+            ON CONFLICT(slug) DO UPDATE SET
+                offset = offset + excluded.offset,
+                ts = excluded.ts
+        """, (slug, body.n, ts))
+        c.commit()
+        new_offset = c.execute("SELECT offset FROM cursors WHERE slug = ?", (slug,)).fetchone()[0]
+        return {"slug": slug, "advanced_by": body.n, "new_offset": new_offset, "ts": ts}
+    except Exception as e:
+        raise HTTPException(500, f"cursor advance: {e}")
+
+
+@app.get("/cursor")
+def list_cursors(limit: int = 100):
+    """List all cursors — useful for ops dashboard."""
+    try:
+        c = _cursor_conn()
+        rows = c.execute(
+            "SELECT slug, offset, ts FROM cursors ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return {"cursors": [{"slug": s, "offset": o, "ts": t} for s, o, t in rows]}
+    except Exception as e:
+        raise HTTPException(500, f"cursor list: {e}")
 
 
 class ChatRequest(BaseModel):
