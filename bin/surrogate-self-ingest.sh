@@ -36,40 +36,57 @@ NEW=$(( CUR - PREV ))
 
 echo "[$(date +%H:%M:%S)] ingesting $NEW new pairs into FTS index" | tee -a "$LOG"
 
-tail -n "$NEW" "$SRC" | python3 - "$INDEX" >> "$LOG" 2>&1 <<'PYEOF'
+# Process in batches of 5000 — gentle, doesn't blow memory
+BATCH_SIZE="${SELF_INGEST_BATCH:-5000}"
+TAKE=$NEW
+[[ $TAKE -gt $BATCH_SIZE ]] && TAKE=$BATCH_SIZE
+echo "[$(date +%H:%M:%S)]   processing $TAKE / $NEW (batch_size=$BATCH_SIZE)" | tee -a "$LOG"
+
+sed -n "$((PREV + 1)),$((PREV + TAKE))p" "$SRC" | python3 - "$INDEX" >> "$LOG" 2>&1 <<'PYEOF'
 import sys, json, sqlite3
-from datetime import datetime
 db = sys.argv[1]
 con = sqlite3.connect(db)
 con.execute("BEGIN")
-n = 0
+n = skipped_short = skipped_parse = 0
 for line in sys.stdin:
     try:
         d = json.loads(line)
-        src = d.get("source", "?")
-        role = src.replace("orchestrate-", "") if src.startswith("orchestrate-") else src
-        ts = d.get("ts", 0)
-        prompt = (d.get("prompt") or "")[:4000]
-        response = (d.get("response") or "")[:8000]
-        if len(prompt) < 50 or len(response) < 50:
-            continue
+    except Exception:
+        skipped_parse += 1
+        continue
+    src = d.get("source", "?")
+    role = src.replace("orchestrate-", "") if src.startswith("orchestrate-") else src
+    ts = d.get("ts", 0)
+    prompt = (d.get("prompt") or "")[:4000]
+    response = (d.get("response") or "")[:8000]
+    # Relaxed filter: index anything with both fields present (was 50-char min)
+    # Even short pairs are useful for tag-based retrieval
+    if not prompt or not response:
+        skipped_short += 1
+        continue
+    try:
         con.execute(
             "INSERT INTO pairs(source,role,prompt,response,ts) VALUES (?,?,?,?,?)",
             (src, role, prompt, response, str(ts))
         )
         n += 1
     except Exception as e:
-        print(f"  skip line: {type(e).__name__}", file=sys.stderr)
+        print(f"  insert err: {type(e).__name__}: {str(e)[:80]}", file=sys.stderr)
 con.commit()
-print(f"  ingested {n} pairs (FTS index)", flush=True)
+print(f"  inserted={n} skipped_parse={skipped_parse} skipped_empty={skipped_short}", flush=True)
 PYEOF
 
-echo "$CUR" > "$OFFSET_FILE"
-echo "[$(date +%H:%M:%S)] ingest done · offset → $CUR" | tee -a "$LOG"
+# Advance offset by what we actually processed
+NEW_OFFSET=$(( PREV + TAKE ))
+echo "$NEW_OFFSET" > "$OFFSET_FILE"
+echo "[$(date +%H:%M:%S)] ingest batch done · offset → $NEW_OFFSET (remaining: $((CUR - NEW_OFFSET)))" | tee -a "$LOG"
 
-# Print quick stats
+# Quick stats
 TOTAL=$(sqlite3 "$INDEX" "SELECT COUNT(*) FROM pairs" 2>/dev/null)
+TOTAL=${TOTAL:-0}
 BY_ROLE=$(sqlite3 "$INDEX" "SELECT role, COUNT(*) FROM pairs GROUP BY role ORDER BY 2 DESC LIMIT 5" 2>/dev/null)
 echo "  total indexed: $TOTAL" | tee -a "$LOG"
-echo "  top roles:" | tee -a "$LOG"
-echo "$BY_ROLE" | sed 's/^/    /' | tee -a "$LOG"
+[[ -n "$BY_ROLE" ]] && {
+    echo "  top roles:" | tee -a "$LOG"
+    echo "$BY_ROLE" | sed 's/^/    /' | tee -a "$LOG"
+}

@@ -1,42 +1,61 @@
 #!/usr/bin/env bash
-# Push accumulated training pairs from local jsonl → axentx/surrogate-1-training-pairs.
-# Uses python HfApi only (CLI syntax changed across versions; not reliable).
-# Idempotent: tracks last-pushed line offset so duplicates are skipped.
-# Only updates offset if push actually succeeded.
+# Push training pairs → HF dataset, INCREMENTALLY in small batches.
+#
+# Strategy: never upload the whole file. Each cron run pushes ONE chunk of
+# CHUNK_SIZE pairs to a date-stamped file (one per day). Small uploads = fast,
+# resilient, avoid timeouts on large blobs.
+#
+# Idempotent: tracks last-pushed line offset. Only advances on success.
+# If 35K pairs queued, drains over ~17 min (CHUNK_SIZE=1500 every 3 min).
 set -uo pipefail
 set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 
 SRC="$HOME/.surrogate/training-pairs.jsonl"
 OFFSET_FILE="$HOME/.surrogate/.training-push-offset"
 LOG="$HOME/.surrogate/logs/training-push.log"
+CHUNK_SIZE="${TRAINING_PUSH_CHUNK:-1500}"
 mkdir -p "$(dirname "$LOG")"
 
 [[ ! -f "$SRC" ]] && { echo "[$(date +%H:%M:%S)] no source $SRC" | tee -a "$LOG"; exit 0; }
 
 CUR_LINES=$(wc -l < "$SRC" | tr -d ' ')
 PREV_OFFSET=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
-NEW_LINES=$(( CUR_LINES - PREV_OFFSET ))
+QUEUED=$(( CUR_LINES - PREV_OFFSET ))
 
-echo "[$(date +%H:%M:%S)] training push: $NEW_LINES new pairs (offset=$PREV_OFFSET, total=$CUR_LINES)" | tee -a "$LOG"
-[[ $NEW_LINES -le 0 ]] && exit 0
+echo "[$(date +%H:%M:%S)] queued=$QUEUED (offset=$PREV_OFFSET total=$CUR_LINES chunk=$CHUNK_SIZE)" | tee -a "$LOG"
+[[ $QUEUED -le 0 ]] && exit 0
 
-# Resolve token from any HF env var name
+# Take just one chunk (don't try to push everything at once — that's why it kept failing)
+TAKE=$QUEUED
+[[ $TAKE -gt $CHUNK_SIZE ]] && TAKE=$CHUNK_SIZE
+
+# Resolve token
 HF_AUTH="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
 if [[ -z "$HF_AUTH" ]]; then
-    echo "[$(date +%H:%M:%S)] ERR: no HF_TOKEN env — cannot upload" | tee -a "$LOG"
+    echo "[$(date +%H:%M:%S)] ERR: no HF_TOKEN — cannot upload" | tee -a "$LOG"
     exit 1
 fi
 
-# Slice new pairs to a date-stamped file
+# Slice this chunk to a unique-per-cron-fire file (no overwrite)
 DATE_TAG=$(date +%Y-%m-%d)
-SLICE="$HOME/.surrogate/.push-slice-${DATE_TAG}.jsonl"
-tail -n "$NEW_LINES" "$SRC" >> "$SLICE"
+TIME_TAG=$(date +%H%M%S)
+SLICE_DIR="$HOME/.surrogate/.push-slices"
+mkdir -p "$SLICE_DIR"
+SLICE="$SLICE_DIR/${DATE_TAG}_${TIME_TAG}.jsonl"
 
-# Upload via python HfApi (explicit token, explicit error handling)
-if HF_AUTH="$HF_AUTH" python3 - "$SLICE" "$NEW_LINES" "$DATE_TAG" >> "$LOG" 2>&1 <<'PYEOF'
-import sys, os, json, hashlib, time
-from pathlib import Path
-slice_path, n_pairs, date_tag = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+# Take TAKE lines starting AFTER prev offset
+sed -n "$((PREV_OFFSET + 1)),$((PREV_OFFSET + TAKE))p" "$SRC" > "$SLICE"
+SLICE_LINES=$(wc -l < "$SLICE" | tr -d ' ')
+SLICE_BYTES=$(wc -c < "$SLICE" | tr -d ' ')
+echo "[$(date +%H:%M:%S)] uploading slice: $SLICE_LINES lines / $((SLICE_BYTES/1024)) KB" | tee -a "$LOG"
+
+# Upload to a chunk-specific filename — never overwrites, just adds new files
+NEW_OFFSET=$(( PREV_OFFSET + TAKE ))
+REMOTE_PATH="batches/${DATE_TAG}/chunk-${TIME_TAG}-${NEW_OFFSET}.jsonl"
+
+if HF_AUTH="$HF_AUTH" python3 - "$SLICE" "$REMOTE_PATH" "$SLICE_LINES" >> "$LOG" 2>&1 <<'PYEOF'
+import sys, os, time
+slice_path, remote, n_lines = sys.argv[1], sys.argv[2], sys.argv[3]
 hf_auth = os.environ["HF_AUTH"]
 
 try:
@@ -45,47 +64,27 @@ except ImportError:
     print(f"[{time.strftime('%H:%M:%S')}] ERR: huggingface_hub not installed")
     sys.exit(2)
 
-# Append to a daily file rather than overwrite — accumulate across pushes
 api = HfApi(token=hf_auth)
-remote_path = f"auto-orchestrate-{date_tag}.jsonl"
 try:
-    # Check if remote file exists; if yes, fetch + concat to avoid losing prior pushes
-    try:
-        existing = api.hf_hub_download(
-            repo_id="axentx/surrogate-1-training-pairs",
-            filename=remote_path,
-            repo_type="dataset",
-            local_dir="/tmp/hf-push-cache",
-            local_dir_use_symlinks=False,
-        )
-        # Concat: existing + slice → new payload
-        merged = Path("/tmp/hf-push-cache") / f"merged-{remote_path}"
-        with open(merged, "wb") as out:
-            out.write(Path(existing).read_bytes())
-            out.write(Path(slice_path).read_bytes())
-        upload_path = str(merged)
-    except Exception:
-        upload_path = slice_path
-
     api.upload_file(
-        path_or_fileobj=upload_path,
-        path_in_repo=remote_path,
+        path_or_fileobj=slice_path,
+        path_in_repo=remote,
         repo_id="axentx/surrogate-1-training-pairs",
         repo_type="dataset",
-        commit_message=f"auto-orchestrate: +{n_pairs} pairs ({time.strftime('%H:%M')})",
+        commit_message=f"chunk: +{n_lines} pairs ({time.strftime('%H:%M')})",
     )
-    print(f"[{time.strftime('%H:%M:%S')}] ✅ uploaded {n_pairs} new pairs to {remote_path}")
+    print(f"[{time.strftime('%H:%M:%S')}] ✅ uploaded → {remote}")
     sys.exit(0)
 except Exception as e:
     print(f"[{time.strftime('%H:%M:%S')}] ❌ {type(e).__name__}: {str(e)[:300]}")
     sys.exit(3)
 PYEOF
 then
-    # Only advance offset on actual upload success
-    echo "$CUR_LINES" > "$OFFSET_FILE"
+    echo "$NEW_OFFSET" > "$OFFSET_FILE"
     rm -f "$SLICE"
-    echo "[$(date +%H:%M:%S)] push complete · offset → $CUR_LINES" | tee -a "$LOG"
+    REMAINING=$(( CUR_LINES - NEW_OFFSET ))
+    echo "[$(date +%H:%M:%S)] offset → $NEW_OFFSET · remaining=$REMAINING (next run)" | tee -a "$LOG"
 else
-    echo "[$(date +%H:%M:%S)] push failed — offset unchanged ($PREV_OFFSET), slice retained for retry" | tee -a "$LOG"
+    echo "[$(date +%H:%M:%S)] push failed — offset still $PREV_OFFSET, slice retained: $SLICE" | tee -a "$LOG"
     exit 1
 fi

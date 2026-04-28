@@ -23,7 +23,7 @@ mkdir -p "$WORK" "$(dirname "$LOG")"
 
 echo "[$(date +%H:%M:%S)] dataset enrich start" | tee "$LOG"
 
-~/.claude/venv/bin/python <<'PYEOF' 2>&1 | tee -a "$LOG"
+python3 <<'PYEOF' 2>&1 | tee -a "$LOG"
 from huggingface_hub import HfApi
 from pathlib import Path
 from datasets import load_dataset

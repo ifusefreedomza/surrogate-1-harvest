@@ -25,10 +25,16 @@ PROC_CAP=30
 DISK_WARN_GB=2
 
 get_load() {
-    uptime | awk -F'load averages:' '{print $2}' | awk '{print int($1)}'
+    uptime | sed -E 's/.*load average[s]?:[[:space:]]*//' | awk -F',' '{print int($1)}'
 }
 get_free_pages() {
-    vm_stat | awk '/Pages free/{gsub("[.]","",$3); print $3}'
+    if [[ -r /proc/meminfo ]]; then
+        awk '/MemAvailable/{print int($2/4)}' /proc/meminfo
+    elif command -v vm_stat >/dev/null 2>&1; then
+        vm_stat | awk '/Pages free/{gsub("[.]","",$3); print $3}'
+    else
+        echo 999999
+    fi
 }
 get_scrape_procs() {
     pgrep -f "fs-to-jsonl\|github-bulk-train\|chroma-to-training\|bulk-scrape-burst" 2>/dev/null | wc -l | tr -d ' '
