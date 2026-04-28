@@ -206,7 +206,8 @@ args = TrainingArguments(
     hub_model_id=HUB_ID,
     hub_strategy="every_save",
     hub_token=os.environ.get("HF_TOKEN"),
-    hub_private_repo=True,    # PRIVATE — only axentx can download Surrogate-1 model
+    hub_private_repo=False,   # PUBLIC for now — multi-checkpoint may exceed 500MB private cap
+                              # User: 'public ไปก่อน แล้วค่อยย้ายไปทีหลัง'
 )
 collator = DataCollatorForSeq2Seq(tok, padding=True, return_tensors="pt")
 trainer = Trainer(model=model, args=args, train_dataset=tokenized,

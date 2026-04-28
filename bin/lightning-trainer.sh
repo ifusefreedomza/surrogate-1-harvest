@@ -106,7 +106,7 @@ args=TrainingArguments(
     warmup_ratio=0.03, lr_scheduler_type="cosine", report_to="none",
     push_to_hub=True, hub_model_id=HUB_ID, hub_strategy="every_save",
     hub_token=os.environ.get("HF_TOKEN"),
-    hub_private_repo=True)    # PRIVATE — proprietary axentx asset
+    hub_private_repo=False)   # PUBLIC — multi-checkpoint > 500MB; flip after train
 collator=DataCollatorForSeq2Seq(tok,padding=True,return_tensors="pt")
 Trainer(model=model,args=args,train_dataset=tokenized,data_collator=collator,
     tokenizer=tok).train()

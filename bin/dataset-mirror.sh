@@ -188,19 +188,54 @@ for src_id, slug in SOURCES:
                 continue
             for row in df:
                 scanned += 1
-                # Heuristic: try common field combinations
-                p = (row.get("prompt") or row.get("instruction") or row.get("question")
-                     or row.get("input") or row.get("query") or "")
-                r = (row.get("response") or row.get("answer") or row.get("output")
-                     or row.get("completion") or row.get("solution") or "")
-                # messages-style
-                if not p and "messages" in row and isinstance(row["messages"], list) and len(row["messages"]) >= 2:
-                    p = str(row["messages"][0].get("content","") or row["messages"][0].get("value",""))
-                    r = str(row["messages"][1].get("content","") or row["messages"][1].get("value",""))
-                # conversations-style
-                if not p and "conversations" in row and isinstance(row["conversations"], list) and len(row["conversations"]) >= 2:
-                    p = str(row["conversations"][0].get("value",""))
-                    r = str(row["conversations"][1].get("value",""))
+                # ── Robust prompt/response extraction across many schemas ──
+                p = ""
+                r = ""
+
+                # 1. Direct fields
+                for f in ("prompt", "instruction", "question", "input", "query", "user"):
+                    if row.get(f):
+                        p = str(row[f]); break
+                for f in ("response", "answer", "output", "completion", "solution", "chosen", "assistant"):
+                    if row.get(f):
+                        r = str(row[f]); break
+
+                # 2. messages-style (works for ultrachat, OpenHermes, lmsys, etc.)
+                if (not p or not r) and isinstance(row.get("messages"), list) and len(row["messages"]) >= 2:
+                    msgs = row["messages"]
+                    # Pick first user msg and following assistant msg
+                    user_msg = next((m for m in msgs if (m.get("role") in ("user", "human")) or (m.get("from") in ("user","human"))), None)
+                    asst_msg = next((m for m in msgs if (m.get("role") in ("assistant","gpt","model")) or (m.get("from") in ("assistant","gpt","model"))), None)
+                    if user_msg and asst_msg:
+                        p = p or str(user_msg.get("content","") or user_msg.get("value",""))
+                        r = r or str(asst_msg.get("content","") or asst_msg.get("value",""))
+                    elif len(msgs) >= 2:
+                        p = p or str(msgs[0].get("content","") or msgs[0].get("value",""))
+                        r = r or str(msgs[1].get("content","") or msgs[1].get("value",""))
+
+                # 3. conversations-style (ShareGPT format)
+                if (not p or not r) and isinstance(row.get("conversations"), list) and len(row["conversations"]) >= 2:
+                    convs = row["conversations"]
+                    user_msg = next((m for m in convs if m.get("from") in ("human","user")), None)
+                    asst_msg = next((m for m in convs if m.get("from") in ("gpt","assistant","model")), None)
+                    if user_msg and asst_msg:
+                        p = p or str(user_msg.get("value",""))
+                        r = r or str(asst_msg.get("value",""))
+                    elif len(convs) >= 2:
+                        p = p or str(convs[0].get("value",""))
+                        r = r or str(convs[1].get("value",""))
+
+                # 4. DPO format (chosen/rejected)
+                if not r and row.get("chosen"):
+                    r = str(row["chosen"])
+                if not p and row.get("rejected_prompt"):
+                    p = str(row["rejected_prompt"])
+
+                # 5. Code-feedback specific (CodeFeedback uses different keys)
+                if not p and row.get("query"):
+                    p = str(row["query"])
+                if not r and row.get("answer"):
+                    r = str(row["answer"])
 
                 p = str(p).strip()[:6000]
                 r = str(r).strip()[:8000]
