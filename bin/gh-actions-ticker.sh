@@ -17,7 +17,8 @@ set -uo pipefail
 LOG="$HOME/.surrogate/logs/gh-actions-ticker.log"
 mkdir -p "$(dirname "$LOG")"
 
-TICK_SEC="${GH_TICK_SEC:-120}"   # 60s -> 120s after HF rate-limit at 128 commits/hr
+TICK_SEC="${GH_TICK_SEC:-90}"    # 60s -> 120s -> 90s. Sweet spot — keeps queue
+                                  # full but uploader retry-backoff absorbs bursts.
 
 dispatch() {
     local repo="$1"
