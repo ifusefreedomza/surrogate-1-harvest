@@ -93,6 +93,10 @@ if [[ -d "$DATA" ]] && [[ -w "$DATA" ]]; then
     nohup bash "${HOME}/.surrogate/bin/kaggle-trainer.sh" >> "$LOG_DIR/kaggle-trainer.log" 2>&1 &
     echo "[$(date +%H:%M:%S)] boot-time kaggle-trainer kicked off" >> "$LOG_DIR/boot.log"
 
+    # ── BOOT-TIME lightning-trainer kickoff — H200 4 hr free for big model ─
+    nohup bash "${HOME}/.surrogate/bin/lightning-trainer.sh" >> "$LOG_DIR/lightning-trainer.log" 2>&1 &
+    echo "[$(date +%H:%M:%S)] boot-time lightning-trainer kicked off (H200 4hr quota)" >> "$LOG_DIR/boot.log"
+
     echo "[$(date +%H:%M:%S)] persistent /data linked (state, logs, memory, skills, sessions, workspace, ollama, training-pairs)" >> "$LOG_DIR/boot.log"
 else
     echo "[$(date +%H:%M:%S)] WARN: /data not writable — running ephemeral!" >> "$LOG_DIR/boot.log"
@@ -349,6 +353,9 @@ while true; do
     # auto-cancels older if 5+ pending. With shorter interval we keep the
     # GPU pipeline saturated.
     [[ $((M % 90)) -eq 5 ]] && bash ~/.surrogate/bin/kaggle-trainer.sh >> "$LOG_DIR/kaggle-trainer.log" 2>&1 &
+    # Every 6 hr: Lightning AI H200 training run (free 4hr H200 quota = ~13/mo).
+    # H200 141GB VRAM fits Qwen3-Coder-480B-A35B QLoRA — biggest free training.
+    [[ $((M % 360)) -eq 45 ]] && bash ~/.surrogate/bin/lightning-trainer.sh >> "$LOG_DIR/lightning-trainer.log" 2>&1 &
     sleep 60
 done
 CRONSH

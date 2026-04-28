@@ -119,10 +119,10 @@ from transformers import (AutoTokenizer, AutoModelForCausalLM,
     TrainingArguments, Trainer, DataCollatorForSeq2Seq, BitsAndBytesConfig)
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 
-BASE = os.environ.get("BASE_MODEL", "Qwen/Qwen3-Coder-30B-A3B-Instruct")  # MoE: 30B total, 3B active per forward — biggest that fits Kaggle T4x2 with QLoRA+FSDP
+BASE = os.environ.get("BASE_MODEL", "Qwen/Qwen3-Coder-Next")  # LATEST official Qwen Coder (2026-02-03), 767K downloads — supersedes 30B-A3B
 MAX_SAMPLES = int(os.environ.get("MAX_SAMPLES", "50000"))
 EPOCHS = float(os.environ.get("EPOCHS", "1"))
-HUB_ID = os.environ.get("HUB_MODEL_ID", "axentx/surrogate-1-coder-30b-a3b-lora-v1")
+HUB_ID = os.environ.get("HUB_MODEL_ID", "axentx/surrogate-1-coder-next-lora-v1")
 
 print(f"━━━ Surrogate-1 LoRA on Kaggle T4 ━━━")
 print(f"base={BASE}  samples={MAX_SAMPLES:,}  epochs={EPOCHS}  hub={HUB_ID}")
