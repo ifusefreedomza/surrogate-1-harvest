@@ -13,8 +13,8 @@ set -a; source "$HOME/.hermes/.env" 2>/dev/null; set +a
 LOG="$HOME/.surrogate/logs/lightning-trainer.log"
 mkdir -p "$(dirname "$LOG")"
 
-if [[ -z "${LIGHTNING_USER_KEY:-}" || -z "${LIGHTNING_USER_ID:-}" ]]; then
-    echo "[$(date +%H:%M:%S)] lightning-trainer skipping — LIGHTNING_USER_KEY/USER_ID not set" | tee -a "$LOG"
+if [[ -z "${LIGHTNING_API_KEY:-}" || -z "${LIGHTNING_USER_ID:-}" ]]; then
+    echo "[$(date +%H:%M:%S)] lightning-trainer skipping — LIGHTNING_API_KEY/USER_ID not set" | tee -a "$LOG"
     exit 0
 fi
 
@@ -23,8 +23,10 @@ if ! command -v lightning >/dev/null 2>&1; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Lightning auth via env
-export LIGHTNING_USER_KEY LIGHTNING_USER_ID
+# Lightning SDK reads from env LIGHTNING_USER_ID + LIGHTNING_API_KEY (newer
+# format) OR LIGHTNING_USER_KEY (older). Export both for redundancy.
+export LIGHTNING_USER_ID LIGHTNING_API_KEY
+export LIGHTNING_USER_KEY="$LIGHTNING_API_KEY"
 
 echo "[$(date +%H:%M:%S)] lightning-trainer cycle start" | tee -a "$LOG"
 
