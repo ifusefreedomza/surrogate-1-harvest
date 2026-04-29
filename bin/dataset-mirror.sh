@@ -134,9 +134,17 @@ def pick_repo(slug):
     h = int(hashlib.md5(slug.encode()).hexdigest()[:8], 16)
     return SIBLINGS[h % len(SIBLINGS)]
 
-STAMPS = Path.home() / ".surrogate/state/dataset-mirror-stamps.json"
-STAMPS.parent.mkdir(parents=True, exist_ok=True)
-stamps = json.loads(STAMPS.read_text()) if STAMPS.exists() else {}
+# Move stamps to /tmp to dodge the recurring 'OSError: Errno 5 Input/output error'
+# on the /data persistent volume during high contention. Re-running a few sources
+# is far cheaper than crashing the whole cycle.
+STAMPS = Path("/tmp/dataset-mirror-stamps.json")
+stamps = {}
+if STAMPS.exists():
+    try:
+        stamps = json.loads(STAMPS.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠ stamps read failed ({type(e).__name__}: {e}); starting fresh", flush=True)
+        stamps = {}
 
 CACHE = Path("/tmp/dataset-mirror-cache")
 CACHE.mkdir(exist_ok=True)
@@ -281,7 +289,10 @@ for src_id, slug in SOURCES:
 
         print(f"  ✅ {src_id}: scanned={scanned:,} kept={kept:,} dup={duped:,} irrelevant={irrelevant:,}", flush=True)
         stamps[slug] = {"ts": int(time.time()), "kept": kept, "scanned": scanned}
-        STAMPS.write_text(json.dumps(stamps, indent=2))
+        try:
+            STAMPS.write_text(json.dumps(stamps, indent=2))
+        except OSError as _ws:
+            print(f"  ⚠ stamps write failed: {_ws}; continuing", flush=True)
     except Exception as e:
         print(f"  ❌ {type(e).__name__}: {str(e)[:200]}", flush=True)
         errors += 1
