@@ -39,6 +39,8 @@ echo ""
 
 # ── Web research preamble: if task mentions tech we don't recognize, search first ──
 RESEARCH_CONTEXT=""
+REPO_CONTEXT=""        # init before strict-mode reference (line 172) — was unbound
+RAG_CONTEXT=""         # same — referenced in prompt template
 RESEARCH_OUT="$WORKDIR/0-research-context.md"
 if echo "$TASK" | grep -iqE "migrat|integrat|switch from|move to|adopt|setup|deploy"; then
     echo "${MA}${B}═══ Stage 0/6: WEB RESEARCH${R} ${D}— gather current docs first${R}"
@@ -214,10 +216,12 @@ def gemini(key, model="gemini-2.5-flash"):
         d = json.load(r)
         return d["candidates"][0]["content"]["parts"][0]["text"]
 
-def oai_compatible(url, model, key, extra_headers=None):
+def oai_compatible(url, model, key, extra_headers=None, user_agent=None):
     body = {"model":model,"messages":[{"role":"user","content":prompt}],
             "temperature":0.3,"max_tokens":8000}
     headers = {"Content-Type":"application/json","Authorization":f"Bearer {key}"}
+    if user_agent:
+        headers["User-Agent"] = user_agent  # Cloudflare 1010 bypass on Cerebras/Groq
     if extra_headers: headers.update(extra_headers)
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     with urllib.request.urlopen(req, timeout=120) as r:
@@ -229,18 +233,32 @@ ladder = []
 prompt_len = len(prompt)
 needs_long_ctx = prompt_len > 20000
 
-# HF Inference Providers PRIORITIZED for code work (highest quality + long context)
-# Qwen3-Coder-480B = 262k native context, best OSS coder
-# DeepSeek-V3.1-Terminus = 164k context
-# GPT-OSS-120B = 128k context
+# PRIMARY: free fast providers first (HF Router 402's on premium models)
+# Cerebras hosts Qwen3-235B + Llama 3.3 70B — free 1M tok/day, 30 RPM, ~500 tok/s
+cerebras_key = os.environ.get("CEREBRAS_API_KEY") or os.environ.get("CEREBRAS_KEY")
+if cerebras_key:
+    for cere_model in ["qwen-3-235b-a22b-instruct-2507", "llama3.1-8b", "gpt-oss-120b"]:
+        ladder.append((f"cerebras:{cere_model[:25]}",
+            lambda m=cere_model: oai_compatible(
+                "https://api.cerebras.ai/v1/chat/completions", m, cerebras_key,
+                user_agent="Mozilla/5.0 surrogate-1-orchestrate")))
+
+# Groq — Llama 3.3 70B + Qwen3-32B free dev tier, ~250 tok/s
+groq_key = os.environ.get("GROQ_API_KEY") or os.environ.get("GROQ_KEY")
+if groq_key:
+    for gq_model in ["llama-3.3-70b-versatile", "qwen/qwen3-32b"]:
+        ladder.append((f"groq:{gq_model[:25]}",
+            lambda m=gq_model: oai_compatible(
+                "https://api.groq.com/openai/v1/chat/completions", m, groq_key,
+                user_agent="Mozilla/5.0 surrogate-1-orchestrate")))
+
+# HF Router LAST resort — premium endpoints often 402 (paid). Keep for emergency
+# fallback when free providers are saturated.
 hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 if hf_token:
-    # Long-context capable models first (priority order matters — first that succeeds is used)
     long_ctx_models = [
-        "Qwen/Qwen3-Coder-480B-A35B-Instruct",   # 262k context, top OSS coder
-        "deepseek-ai/DeepSeek-V3.1-Terminus",    # 164k context
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",    # 128k context, often FREE on router
         "openai/gpt-oss-120b",                   # 128k context
-        "Qwen/Qwen3-235B-A22B-Instruct-2507",    # 128k context
     ]
     for hf_model in long_ctx_models:
         ladder.append((f"hf-router:{hf_model.split('/')[-1][:30]}",
