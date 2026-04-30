@@ -49,36 +49,34 @@ HF_AUTH="${HF_TOKEN:-}"
 
 while [[ $(date +%s) -lt $DEADLINE ]]; do
     n_polls=$((n_polls + 1))
-    # Check if the model repo has any commits beyond the implicit 'initial commit'.
-    # We use /api/models/<repo>/commits/main and count entries.
-    commits=$(curl -fsS --max-time 20 \
+    # Hit the model API directly — siblings list tells us if an adapter file
+    # has been pushed. This is more reliable than counting commits (avoids
+    # pipe-stdout shenanigans + handles 404 cleanly when repo doesn't exist).
+    api_response=$(curl -fsS --max-time 20 \
         ${HF_AUTH:+-H "Authorization: Bearer $HF_AUTH"} \
-        "https://huggingface.co/api/models/${TARGET}/commits/main?limit=50" \
-        2>/dev/null | python3 -c "
+        "https://huggingface.co/api/models/${TARGET}" 2>/dev/null || echo "")
+    has_adapter=0
+    n_files=0
+    if [[ -n "$api_response" ]]; then
+        n_files=$(echo "$api_response" | python3 -c "
 import json, sys
 try: d = json.load(sys.stdin)
-except: print('0'); sys.exit()
-print(len(d) if isinstance(d, list) else '0')
-" 2>/dev/null || echo "0")
-
-    # Need ≥2 commits (initial + first checkpoint). 1 = repo created but no
-    # adapter pushed yet. 0 = repo doesn't exist yet.
-    if [[ "$commits" -ge 2 ]]; then
-        # Look for an actual adapter file (adapter_model.safetensors or
-        # adapter_config.json) — confirms it's a real LoRA push, not just
-        # a README commit.
-        has_adapter=$(curl -fsS --max-time 20 \
-            ${HF_AUTH:+-H "Authorization: Bearer $HF_AUTH"} \
-            "https://huggingface.co/api/models/${TARGET}" 2>/dev/null \
-            | python3 -c "
+except Exception: print(0); sys.exit(0)
+sib = d.get('siblings', [])
+print(len(sib))
+" 2>/dev/null | head -1 | tr -d ' \n')
+        n_files=${n_files:-0}
+        has_adapter=$(echo "$api_response" | python3 -c "
 import json, sys
 try: d = json.load(sys.stdin)
-except: print('0'); sys.exit()
+except Exception: print(0); sys.exit(0)
 sib = [s.get('rfilename','') for s in d.get('siblings', [])]
-print('1' if any('adapter' in s for s in sib) else '0')
-" 2>/dev/null || echo "0")
+print(1 if any('adapter' in s for s in sib) else 0)
+" 2>/dev/null | head -1 | tr -d ' \n')
+        has_adapter=${has_adapter:-0}
+    fi
 
-        if [[ "$has_adapter" == "1" ]]; then
+    if [[ "$has_adapter" == "1" ]]; then
             log "✓ adapter detected on ${TARGET} after ${n_polls} polls "\
 "(${commits} commits) — firing bench"
             notify "checkpoint detected → firing bench-v1-vs-v15"
