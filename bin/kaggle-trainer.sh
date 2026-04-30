@@ -173,7 +173,12 @@ print(f"  bf16 ok    : {BF16_OK}")
 print(f"  attn impl  : {ATTN_IMPL}")
 print()
 
-# ── R12: 5 sibling datasets interleaved ─────────────────────────────────────
+# ── R12: 5 sibling datasets — round-robin manual iteration ──────────────────
+# Can't use interleave_datasets() — rows harvested at different times have
+# heterogeneous schemas (some {ts,url,title,domain,depth,...}, others
+# {instruction,response,source,...}). datasets.CastError on union.
+# Defensive: stream each dataset, extract just prompt+response (multiple
+# field-name aliases), drop unreadable rows individually, training continues.
 SIBLINGS = [
     "axentx/surrogate-1-training-pairs",
     "axentx/surrogate-1-pairs-A",
@@ -181,23 +186,82 @@ SIBLINGS = [
     "axentx/surrogate-1-pairs-C",
     "axentx/surrogate-1-pairs-D",
 ]
-streams = []
-for r in SIBLINGS:
+
+
+def extract_pair(ex):
+    """Robust prompt+response extraction — handles mixed schemas."""
+    if not isinstance(ex, dict):
+        return None
+    p = (ex.get("prompt") or ex.get("instruction") or
+         ex.get("question") or ex.get("input") or "")
+    r = (ex.get("response") or ex.get("output") or
+         ex.get("answer") or ex.get("completion") or "")
+    # ShareGPT / messages fallback
+    if (not p or not r) and isinstance(ex.get("messages"), list):
+        msgs = ex["messages"]
+        u = next((m.get("content", "") for m in msgs
+                  if m.get("role") in ("user", "human")), "")
+        a = next((m.get("content", "") for m in msgs
+                  if m.get("role") in ("assistant", "gpt")), "")
+        if u and a:
+            p, r = u, a
+    p, r = str(p).strip(), str(r).strip()
+    if len(p) < 20 or len(r) < 30:
+        return None
+    return p, r
+
+
+# Open all 5 streams as separate iterators — round-robin pull to mix sources
+iterators = []
+for repo in SIBLINGS:
     try:
-        streams.append(load_dataset(r, split="train", streaming=True))
-        print(f"  ✓ stream loaded: {r}")
+        ds = load_dataset(repo, split="train", streaming=True)
+        iterators.append((repo, iter(ds)))
+        print(f"  ✓ opened: {repo}")
     except Exception as e:
-        print(f"  ✗ skip {r}: {e}")
-ds = interleave_datasets(streams, stopping_strategy="all_exhausted")
+        print(f"  ✗ skip {repo}: {type(e).__name__}: {str(e)[:120]}")
 
 rows = []
-for i, ex in enumerate(ds):
-    if i >= MAX_SAMPLES: break
-    p = (ex.get("prompt") or ex.get("instruction") or "").strip()
-    r = (ex.get("response") or ex.get("output") or "").strip()
-    if len(p) >= 20 and len(r) >= 30:
-        rows.append({"prompt": p, "response": r})
-print(f"  → kept {len(rows):,} samples (target {MAX_SAMPLES:,})")
+n_seen = n_drop = 0
+n_per_source = {repo: 0 for repo, _ in iterators}
+exhausted = set()
+while iterators and len(rows) < MAX_SAMPLES:
+    progressed = False
+    for repo, it in iterators:
+        if repo in exhausted:
+            continue
+        if len(rows) >= MAX_SAMPLES:
+            break
+        try:
+            ex = next(it)
+            progressed = True
+        except StopIteration:
+            exhausted.add(repo)
+            continue
+        except Exception as e:
+            # Per-row CastError or other transient — skip row, keep streaming
+            n_drop += 1
+            if n_drop % 2000 == 1:
+                print(f"  drop row #{n_drop} from {repo}: "
+                      f"{type(e).__name__}: {str(e)[:80]}")
+            continue
+        n_seen += 1
+        pair = extract_pair(ex)
+        if pair:
+            p, r = pair
+            rows.append({"prompt": p, "response": r})
+            n_per_source[repo] += 1
+        else:
+            n_drop += 1
+        if n_seen % 5000 == 0:
+            print(f"  progress: seen={n_seen:,} kept={len(rows):,} "
+                  f"drop={n_drop:,}")
+    if not progressed:
+        break
+
+print(f"  → kept {len(rows):,} samples (target {MAX_SAMPLES:,}, "
+      f"seen={n_seen:,}, drop={n_drop:,})")
+print(f"  per-source counts: {n_per_source}")
 raw = Dataset.from_list(rows)
 
 # ── Tokenizer ───────────────────────────────────────────────────────────────
