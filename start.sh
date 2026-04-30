@@ -334,12 +334,23 @@ echo "[$(date +%H:%M:%S)] skill-synthesis daemon started" >> "$LOG_DIR/boot.log"
 # 100+ massive datasets in bin/v2/bulk-datasets-massive.txt (code/security/SDLC/agent/etc).
 # Lease-based claims (15 min) — crashes auto-expire so other workers pick up.
 python3 ~/.surrogate/bin/v2/bulk-mirror-coordinator.py seed >> "$LOG_DIR/bulk-mirror-seed.log" 2>&1 || true
+
+# Two worker types share the same coordinator queue:
+#   bulk-mirror-worker.sh    — full-download, suits small/medium datasets
+#   streaming-mirror-worker.sh — HF datasets streaming, suits trillion-token
 BULK_WORKERS="${BULK_WORKERS:-$([[ "$LOW_MEM" == "1" ]] && echo 1 || echo 4)}"
+STREAM_WORKERS="${STREAM_WORKERS:-$([[ "$LOW_MEM" == "1" ]] && echo 2 || echo 4)}"
+
 for i in $(seq 1 "$BULK_WORKERS"); do
     nohup bash ~/.surrogate/bin/v2/bulk-mirror-worker.sh "bulk-w$i" \
         > "$LOG_DIR/bulk-worker-$i.log" 2>&1 &
 done
-echo "[$(date +%H:%M:%S)] bulk-mirror coordinator + $BULK_WORKERS workers started (100+ datasets queued, LOW_MEM=$LOW_MEM)" >> "$LOG_DIR/boot.log"
+for i in $(seq 1 "$STREAM_WORKERS"); do
+    nohup bash ~/.surrogate/bin/v2/streaming-mirror-worker.sh "stream-w$i" \
+        > "$LOG_DIR/stream-worker-$i.log" 2>&1 &
+done
+TOTAL_WORKERS=$((BULK_WORKERS + STREAM_WORKERS))
+echo "[$(date +%H:%M:%S)] bulk-mirror coordinator + $BULK_WORKERS bulk + $STREAM_WORKERS streaming = $TOTAL_WORKERS workers (200+ datasets queued, LOW_MEM=$LOW_MEM)" >> "$LOG_DIR/boot.log"
 
 # ── 7d. Train-ready pusher — disabled at boot for now. Caused Space
 #       RUNTIME_ERROR on first deployment (2026-04-29). Script kept at
@@ -422,6 +433,38 @@ while true; do
         [[ -n "$WIN" ]] && python3 ~/.surrogate/bin/v2/constitutional-loop.py \
             --input "$WIN" --n 200 \
             >> "$LOG_DIR/constitutional.log" 2>&1 &
+    }
+
+    # ── Round 7+8 (2026-04-30) — trillion-scale + harvester + enrich ──────
+    # Every 30 min (offset 9): aggressive HF dataset discoverer (70-keyword sweep)
+    [[ $((M % 30)) -eq 9 ]] && bash ~/.surrogate/bin/v2/aggressive-harvester.sh \
+        >> "$LOG_DIR/aggressive-harvester.log" 2>&1 &
+    # Every 60 min (offset 35): enrich newly-mirrored bulk files
+    [[ $((M % 60)) -eq 35 ]] && bash ~/.surrogate/bin/v2/enrich-pipeline.sh \
+        >> "$LOG_DIR/enrich-pipeline.log" 2>&1 &
+    # Every 30 min (offset 25): spawn extra streaming worker if pool empty
+    [[ $((M % 30)) -eq 25 ]] && {
+        if ! pgrep -f "streaming-mirror-worker.sh" >/dev/null; then
+            nohup bash ~/.surrogate/bin/v2/streaming-mirror-worker.sh "stream-cron-$(date +%s)" \
+                > "$LOG_DIR/stream-worker-cron.log" 2>&1 &
+        fi
+    }
+    # Daily 09:00 UTC: teachable-prompt filter on harvested data
+    [[ $((M % 1440)) -eq 540 ]] && {
+        LATEST=$(ls -t "$DATA"/v2/enriched/*.jsonl 2>/dev/null | head -1)
+        [[ -n "$LATEST" ]] && python3 ~/.surrogate/bin/v2/teachable-prompt-filter.py \
+            --input "$LATEST" --out "$DATA"/v2/teachable-$(date +%Y%m%d).jsonl \
+            --n 1000 --keep-target 200 \
+            >> "$LOG_DIR/teachable.log" 2>&1 &
+    }
+    # Weekly Sun 10:00 UTC: abstract-cot compress reasoning data
+    [[ $((M % 10080)) -eq 600 ]] && {
+        for f in "$DATA"/v2/verify-traces.jsonl "$DATA"/v2/self-improve/winners-*.jsonl; do
+            [[ -f "$f" ]] || continue
+            python3 ~/.surrogate/bin/v2/abstract-cot-compressor.py \
+                --input "$f" --out "${f%.jsonl}-compressed.jsonl" \
+                >> "$LOG_DIR/abstract-cot.log" 2>&1
+        done
     }
     sleep 60
 done

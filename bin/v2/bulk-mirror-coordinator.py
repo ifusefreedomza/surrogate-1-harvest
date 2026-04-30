@@ -20,7 +20,12 @@ from pathlib import Path
 
 DB_PATH = Path.home() / ".surrogate/state/bulk-mirror-claims.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LIST_PATH = Path.home() / ".surrogate/bin/v2/bulk-datasets-massive.txt"
+# Two registries: bulk-datasets-massive.txt (legacy 4-col) +
+# trillion-token-sources.txt (5-col with streaming flag). Seed reads both.
+LIST_PATHS = [
+    Path.home() / ".surrogate/bin/v2/bulk-datasets-massive.txt",
+    Path.home() / ".surrogate/bin/v2/trillion-token-sources.txt",
+]
 LEASE_SECS = 15 * 60   # claim expires after 15 min if no `done` call
 
 
@@ -45,29 +50,35 @@ def db():
 
 
 def seed():
-    """One-time: load massive list into queue."""
-    if not LIST_PATH.exists():
-        print(f"❌ {LIST_PATH} missing")
-        return
+    """Load both massive + trillion-token registries into queue."""
     c = db()
-    n = 0
-    with open(LIST_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            try:
-                repo, cat, mx, pri = line.split("|")
-                c.execute("""INSERT OR IGNORE INTO claims
-                             (repo_id, category, max_samples, priority)
-                             VALUES (?, ?, ?, ?)""",
-                          (repo.strip(), cat.strip(), int(mx), int(pri)))
-                if c.total_changes:
-                    n += 1
-            except Exception as e:
-                print(f"  skip {line[:60]}: {e}")
+    n_total = 0
+    for list_path in LIST_PATHS:
+        if not list_path.exists():
+            print(f"  skip (missing): {list_path}")
+            continue
+        n = 0
+        with open(list_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    parts = line.split("|")
+                    # Accept 4-col (legacy) or 5-col (trillion-tokens with streaming flag)
+                    repo, cat, mx, pri = parts[0], parts[1], parts[2], parts[3]
+                    c.execute("""INSERT OR IGNORE INTO claims
+                                 (repo_id, category, max_samples, priority)
+                                 VALUES (?, ?, ?, ?)""",
+                              (repo.strip(), cat.strip(), int(mx), int(pri)))
+                    if c.total_changes:
+                        n += 1
+                except Exception as e:
+                    print(f"  skip {line[:60]}: {e}")
+        print(f"  seeded {n} from {list_path.name}")
+        n_total += n
     c.close()
-    print(f"✅ seeded {n} new entries (existing rows untouched)")
+    print(f"✅ total seeded {n_total} new entries (existing rows untouched)")
 
 
 def claim(worker_id: str | None = None):
