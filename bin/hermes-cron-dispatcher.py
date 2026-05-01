@@ -130,6 +130,34 @@ def call_llm(prompt: str, max_tokens: int = 1024, timeout: int = 60) -> str:
     raise RuntimeError(f"all LLM providers failed; last={last_err}")
 
 
+# Cloud-side path remapping — Mac jobs.json has script refs like:
+#   /Users/Ashira/.claude/bin/foo.sh
+#   bash ~/.claude/bin/foo.sh
+#   foo.sh                  (no path, expects PATH lookup)
+# On the OCI coordinator we want all of these to resolve to ./bin/foo.sh.
+_REPO_BIN = REPO_ROOT / "bin"
+
+
+def _rewrite_for_cloud(cmd: str) -> str:
+    """Rewrite Mac-side absolute paths so the same command runs on the OCI box."""
+    rewrites = (
+        ("/Users/Ashira/.claude/bin/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/.hermes/scripts/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/.hermes/bin/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/.surrogate/bin/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/.surrogate/hf-space/bin/v2/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/develope/hermes-toolbelt/claude-bin/", str(_REPO_BIN) + "/"),
+        ("/Users/Ashira/develope/hermes-toolbelt/hermes-scripts/", str(_REPO_BIN) + "/"),
+        ("$HOME/.claude/bin/", str(_REPO_BIN) + "/"),
+        ("$HOME/.hermes/scripts/", str(_REPO_BIN) + "/"),
+        ("~/.claude/bin/", str(_REPO_BIN) + "/"),
+        ("~/.hermes/scripts/", str(_REPO_BIN) + "/"),
+    )
+    for old, new in rewrites:
+        cmd = cmd.replace(old, new)
+    return cmd
+
+
 def execute_job(job: dict) -> tuple[bool, str]:
     """Run a single hermes-cron job. Returns (success, output)."""
     job_id = job.get("id", "?")
@@ -139,10 +167,14 @@ def execute_job(job: dict) -> tuple[bool, str]:
     # Job has a script field (shell-driven)
     script = job.get("script")
     if script:
+        cmd = _rewrite_for_cloud(script)
+        env = dict(os.environ)
+        env["PATH"] = f"{_REPO_BIN}:{env.get('PATH', '')}"
         try:
             r = subprocess.run(
-                ["bash", "-c", script],
-                capture_output=True, text=True, timeout=600,
+                ["bash", "-c", cmd],
+                capture_output=True, text=True, timeout=600, env=env,
+                cwd=str(REPO_ROOT),
             )
             return r.returncode == 0, (r.stdout + r.stderr)[:4000]
         except subprocess.TimeoutExpired:
