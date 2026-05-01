@@ -228,6 +228,61 @@ def synthesize(prompt: str, system: str = "", n_attempts: int = 3,
     return call_llm(sp, "", max_tokens, timeout)
 
 
+
+
+def rag_query(question: str, top_k: int = 5, kind: str | None = None) -> str:
+    """RAG retrieval over the surrogate-1-rag Vectorize index.
+
+    Returns a formatted block of top_k matches (source path + first 200 chars
+    of the chunk). Agents prepend this to their LLM prompts to recall past
+    decisions / lessons / skills / knowledge before generating new output.
+
+    Falls through to empty string on any failure (CF outage, missing token,
+    cold index) — RAG is augmentation, never a hard dependency.
+    """
+    import json as _j, urllib.request as _u, urllib.error as _ue
+    tok = os.environ.get("CLOUDFLARE_API_TOKEN")
+    acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not tok or not acct:
+        return ""
+    try:
+        # 1. embed the question
+        emb_req = _u.Request(
+            f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/@cf/baai/bge-base-en-v1.5",
+            data=_j.dumps({"text": [question[:500]]}).encode(),
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+        )
+        with _u.urlopen(emb_req, timeout=15) as r:
+            emb = _j.loads(r.read())
+        if not emb.get("success"): return ""
+        qvec = emb["result"]["data"][0]
+
+        # 2. query Vectorize
+        q_body = {"vector": qvec, "topK": top_k, "returnMetadata": "all", "returnValues": False}
+        if kind:
+            q_body["filter"] = {"kind": kind}
+        q_req = _u.Request(
+            f"https://api.cloudflare.com/client/v4/accounts/{acct}/vectorize/v2/indexes/surrogate-1-rag/query",
+            data=_j.dumps(q_body).encode(),
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+        )
+        with _u.urlopen(q_req, timeout=15) as r:
+            q = _j.loads(r.read())
+        if not q.get("success"): return ""
+        matches = q["result"]["matches"]
+        if not matches: return ""
+
+        out_lines = ["=== relevant past context (RAG) ==="]
+        for m in matches:
+            md = m.get("metadata") or {}
+            out_lines.append(
+                f"  [{m.get('score',0):.2f}] {md.get('source','?')} (kind={md.get('kind','?')})"
+            )
+        out_lines.append("=== end RAG ===\n")
+        return "\n".join(out_lines)
+    except Exception:
+        return ""
+
 def new_item(project: str, focus: str, prompt: str) -> dict:
     ts = datetime.datetime.utcnow()
     sid = hashlib.sha1(f"{ts.isoformat()}-{project}-{focus}".encode()).hexdigest()[:8]
