@@ -86,18 +86,48 @@ def _call_surrogate_v1(prompt: str, timeout: int = 60) -> str:
     raise RuntimeError("v1: SSE returned no usable data")
 
 
+def _call_gemini(prompt: str, system: str = "", max_tokens: int = 1500,
+                 timeout: int = 30, model: str = "gemini-2.0-flash") -> str:
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not key: raise RuntimeError("no GOOGLE/GEMINI key")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    body = {"contents": [{"parts": [{"text": (system + "\n\n" if system else "") + prompt[:8000]}]}],
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3}}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                  headers={"Content-Type": "application/json", "User-Agent": UA_BROWSER})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read())
+    return d["candidates"][0]["content"]["parts"][0]["text"]
+
+
 def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
              timeout: int = 30) -> str:
-    """Multi-provider fallback. Order: Groq 70B → Cerebras 8B → OpenRouter
-    free → Surrogate-1 v1 (own LoRA, last resort)."""
+    """11-provider fallback chain — burns through providers until one works.
+    Order optimized: best-quality / fastest / largest free quota first."""
+    # OpenAI-compatible providers (Chat Completions API shape)
     chains = [
         ("Groq", "https://api.groq.com/openai/v1/chat/completions",
          os.environ.get("GROQ_API_KEY"), "llama-3.3-70b-versatile"),
         ("Cerebras", "https://api.cerebras.ai/v1/chat/completions",
          os.environ.get("CEREBRAS_API_KEY"), "llama3.1-8b"),
+        ("SambaNova", "https://api.sambanova.ai/v1/chat/completions",
+         os.environ.get("SAMBANOVA_API_KEY"), "Meta-Llama-3.3-70B-Instruct"),
+        ("NVIDIA-NIM", "https://integrate.api.nvidia.com/v1/chat/completions",
+         os.environ.get("NVIDIA_NIM_API_KEY") or os.environ.get("NVIDIA_API_KEY"),
+         "meta/llama-3.3-70b-instruct"),
+        ("Kimi", "https://api.moonshot.ai/v1/chat/completions",
+         os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY"),
+         "moonshot-v1-8k"),
+        ("xAI", "https://api.x.ai/v1/chat/completions",
+         os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY"),
+         "grok-2-1212"),
+        ("Chutes", "https://llm.chutes.ai/v1/chat/completions",
+         os.environ.get("CHUTES_API_KEY"), "deepseek-ai/DeepSeek-V3"),
         ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions",
          os.environ.get("OPENROUTER_API_KEY"),
          "meta-llama/llama-3.3-70b-instruct:free"),
+        ("GitHub-Models", "https://models.inference.ai.azure.com/chat/completions",
+         os.environ.get("GITHUB_MODELS_TOKEN"), "gpt-4o-mini"),
     ]
     messages = []
     if system:
@@ -128,6 +158,12 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
                 TimeoutError, json.JSONDecodeError) as e:
             last_err = f"{name}/{model}: {e}"
             continue
+
+    # Gemini (different API shape — handled separately)
+    try:
+        return _call_gemini(prompt, system, max_tokens, timeout)
+    except Exception as e:
+        last_err = f"Gemini: {e} (after {last_err})"
 
     # Last resort: own Surrogate-1 v1 LoRA via ZeroGPU Space.
     if os.environ.get("USE_V1_FALLBACK", "1") == "1":
