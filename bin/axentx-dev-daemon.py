@@ -18,7 +18,7 @@ from pathlib import Path
 
 # import shared infra
 sys.path.insert(0, str(Path(__file__).parent))
-from axentx_pipeline import (REPO_ROOT, QUEUES, log, call_llm,
+from axentx_pipeline import (REPO_ROOT, QUEUES, log, call_llm, synthesize,
                              new_item, write_item, daemon_loop)
 
 PROJECTS_ROOT = Path(os.environ.get("AXENTX_ROOT", "/opt/axentx"))
@@ -120,9 +120,16 @@ def do_one_cycle() -> bool:
     prompt = PROMPT_TPL.format(
         project=project, repo_path=repo_path,
         focus=focus, git_log=git_log, readme=readme, prior_decisions=prior)
-    log("dev", f"▸ {project} / {focus}")
+    # Synthesis pass = 3 LLM attempts + 1 synth. Heavier but better quality.
+    # Toggle SYNTH_DEV=0 to fall back to single call_llm.
+    synth_enabled = os.environ.get("SYNTH_DEV", "1") == "1"
+    log("dev", f"▸ {project} / {focus}{' [synth=3]' if synth_enabled else ''}")
     try:
-        out = call_llm(prompt, system=DEV_SYSTEM, max_tokens=2000, timeout=45)
+        if synth_enabled:
+            out = synthesize(prompt, system=DEV_SYSTEM, n_attempts=3,
+                             max_tokens=2000, timeout=45)
+        else:
+            out = call_llm(prompt, system=DEV_SYSTEM, max_tokens=2000, timeout=45)
     except Exception as e:
         log("dev", f"✗ LLM failed: {e}")
         return False

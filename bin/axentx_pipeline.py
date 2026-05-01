@@ -54,13 +54,42 @@ def log(role: str, msg: str) -> None:
         f.write(line + "\n")
 
 
+UA_BROWSER = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+
+def _call_surrogate_v1(prompt: str, timeout: int = 60) -> str:
+    """Call user's own Surrogate-1 v1 LoRA via ashirato/surrogate-1-zero-gpu
+    Gradio Space. Uses POST /call/respond → poll SSE event_id pattern."""
+    space = "https://ashirato-surrogate-1-zero-gpu.hf.space"
+    hf = os.environ.get("HF_TOKEN", "")
+    h = {"Content-Type": "application/json", "User-Agent": UA_BROWSER}
+    if hf: h["Authorization"] = f"Bearer {hf}"
+    body = json.dumps({"data": [prompt[:4000]]}).encode()
+    req = urllib.request.Request(f"{space}/call/respond", data=body, headers=h)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        ev = json.loads(r.read()).get("event_id")
+    if not ev: raise RuntimeError("v1: no event_id")
+    poll = urllib.request.Request(f"{space}/call/respond/{ev}", headers=h)
+    with urllib.request.urlopen(poll, timeout=timeout) as r:
+        text = r.read().decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[6:]
+            if payload in ("null", ""): continue
+            try:
+                d = json.loads(payload)
+                if isinstance(d, list) and d: return str(d[0])
+                if isinstance(d, str): return d
+            except json.JSONDecodeError:
+                return payload
+    raise RuntimeError("v1: SSE returned no usable data")
+
+
 def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
              timeout: int = 30) -> str:
-    """Cerebras → Groq → OpenRouter fallback chain."""
-    # Probed live 2026-05-01: only these model names work for our keys.
-    # Cerebras llama-3.3-70b is gated; only llama3.1-8b is free-tier visible.
-    # Groq llama-3.3-70b-versatile is best-quality + always-on for our token.
-    # OpenRouter free endpoints all 404/429 — dropped from chain.
+    """Multi-provider fallback. Order: Groq 70B → Cerebras 8B → OpenRouter
+    free → Surrogate-1 v1 (own LoRA, last resort)."""
     chains = [
         ("Groq", "https://api.groq.com/openai/v1/chat/completions",
          os.environ.get("GROQ_API_KEY"), "llama-3.3-70b-versatile"),
@@ -99,7 +128,34 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
                 TimeoutError, json.JSONDecodeError) as e:
             last_err = f"{name}/{model}: {e}"
             continue
+
+    # Last resort: own Surrogate-1 v1 LoRA via ZeroGPU Space.
+    if os.environ.get("USE_V1_FALLBACK", "1") == "1":
+        try:
+            full = (system + "\n\n" + prompt) if system else prompt
+            return _call_surrogate_v1(full, timeout=max(timeout, 60))
+        except Exception as e:
+            last_err = f"surrogate-v1: {e} (after {last_err})"
     raise RuntimeError(f"all LLM providers failed; last={last_err}")
+
+
+def synthesize(prompt: str, system: str = "", n_attempts: int = 3,
+               max_tokens: int = 1500, timeout: int = 30) -> str:
+    """Generate N candidates, then call once more to synthesize the best.
+    Quality > raw call_llm at the cost of N+1 LLM credits."""
+    if n_attempts < 2:
+        return call_llm(prompt, system, max_tokens, timeout)
+    cands = []
+    for _ in range(n_attempts):
+        try: cands.append(call_llm(prompt, system, max_tokens, timeout))
+        except Exception: continue
+    if not cands: raise RuntimeError("synthesize: no candidate succeeded")
+    if len(cands) == 1: return cands[0]
+    sp = ("Synthesize the best parts of multiple AI proposals. Combine the "
+          "strongest insights into ONE final answer. Resolve contradictions in "
+          "favor of correctness + concrete actionability.\n\n" +
+          "\n\n---\n\n".join(f"Candidate {i+1}:\n{c}" for i, c in enumerate(cands)))
+    return call_llm(sp, "", max_tokens, timeout)
 
 
 def new_item(project: str, focus: str, prompt: str) -> dict:
