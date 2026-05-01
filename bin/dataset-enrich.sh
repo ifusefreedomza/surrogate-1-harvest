@@ -838,9 +838,12 @@ with open(out_path, "w") as out:
                     import urllib.request as _u, json as _j
                     _adv_url = f"{os.environ.get('CURSOR_SERVICE_URL', 'https://surrogate-1-cursor.ashira.workers.dev')}/cursor/{slug}/advance"
                     _adv_token = os.environ.get('CURSOR_AUTH_TOKEN', '')
+                    _hdrs = {"Content-Type": "application/json"}
+                    if _adv_token:
+                        _hdrs["X-Auth-Token"] = _adv_token
                     _req = _u.Request(_adv_url, method="POST",
-                                       data=_j.dumps({"n": total}).encode(),
-                                       headers={"Content-Type": "application/json"})
+                                       data=_j.dumps({"size": total}).encode(),
+                                       headers=_hdrs)
                     _u.urlopen(_req, timeout=8).read()
                 except Exception as _ce:
                     pass  # cursor service unavailable — non-fatal
