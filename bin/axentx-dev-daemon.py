@@ -19,11 +19,11 @@ from pathlib import Path
 # import shared infra
 sys.path.insert(0, str(Path(__file__).parent))
 from axentx_pipeline import (REPO_ROOT, QUEUES, log, call_llm, synthesize,
-                             new_item, write_item, daemon_loop)
+                             new_item, write_item, daemon_loop,
+                             pick_oldest, advance)
 
 PROJECTS_ROOT = Path(os.environ.get("AXENTX_ROOT", "/opt/axentx"))
-ROTATION = ["Costinel", "Vanguard", "arkship", "Costinel", "Vanguard",
-            "arkship", "surrogate", "workio"]
+ROTATION = ["Costinel", "vanguard", "airship", "axiomops", "workio", "surrogate-1"]
 FOCUS_CYCLE = ["discovery", "design", "backend", "frontend", "quality", "ops"]
 CURSOR_FILE = REPO_ROOT / "state" / "axentx-dev-cursor.json"
 NEW_TASK_INTERVAL = int(os.environ.get("DEV_DAEMON_INTERVAL_SEC", "300"))
@@ -98,15 +98,69 @@ def repo_context(project: str) -> tuple[str, str, str]:
 MAX_REVIEW_BACKLOG = int(os.environ.get("DEV_MAX_REVIEW_BACKLOG", "15"))
 
 
+def refine_rejected_task(src_path, item) -> bool:
+    """Pick up a reviewer-rejected dev task, feed the reject reason back to
+    the LLM so the next attempt addresses the specific blockers, and re-push
+    to review-queue. This is the self-improvement loop — every rejection
+    becomes training signal for the immediate next attempt."""
+    project = item.get("project", "?")
+    focus = item.get("focus", "?")
+    attempts = int(item.get("dev_attempts", 1))  # already 1 from initial dev pass
+    rejected_text = item.get("current", {}).get("text", "")
+    repo_path = PROJECTS_ROOT / project
+
+    log("dev", f"↺ refine {item['id']} ({project}/{focus}) attempt {attempts+1}")
+
+    git_log, readme, prior = repo_context(project)
+    refine_prompt = (
+        f"REFINEMENT — your previous attempt was rejected. The reviewer's "
+        f"specific feedback is below. Address each cited blocker concretely.\n\n"
+        f"=== reviewer feedback ===\n{rejected_text[:3500]}\n\n"
+        f"=== project context ===\nProject: {project}  ({repo_path})\n"
+        f"Focus: {focus}\nGit log:\n{git_log}\n\nREADME:\n{readme[:1500]}\n\n"
+        f"=== task ===\nProduce a CONCRETE implementation that resolves every "
+        f"blocker the reviewer cited. Output sections: Diagnosis, Proposed "
+        f"change (specific files/lines), Implementation (actual code/diff, "
+        f"not 'add documentation' — show the lines), Verification."
+    )
+    try:
+        out = synthesize(refine_prompt, system=DEV_SYSTEM, n_attempts=2,
+                         max_tokens=2500, timeout=50)
+    except Exception as e:
+        log("dev", f"✗ refine LLM failed: {e}")
+        return False
+
+    item["dev_attempts"] = attempts + 1
+    item["history"].append({
+        "stage": "dev",
+        "actor": "claude/llm-fallback-chain",
+        "output": out[:6000],
+        "at": datetime.datetime.utcnow().isoformat() + "Z",
+        "is_refinement": True,
+        "addresses_attempt": attempts,
+    })
+    item["current"]["text"] = out[:6000]
+    advance(item, src_path, "review", "dev", out)
+    log("dev", f"✓ {item['id']} refined → review-queue (attempt {attempts+1})")
+    return True
+
+
 def do_one_cycle() -> bool:
-    # Throttle: if reviewer hasn't caught up, don't pile on more dev output.
-    # Pipeline naturally rate-limits to slowest consumer this way.
+    # Step 1: drain rejected items first — they have reviewer feedback that
+    # makes them MORE likely to converge than a fresh task. Self-improvement
+    # loop: reject → refine with feedback → re-review.
+    rejected = pick_oldest("dev")
+    if rejected:
+        return refine_rejected_task(*rejected)
+
+    # Step 2: backpressure — don't generate new tasks if downstream is jammed.
     review_q = REPO_ROOT / "state" / "swarm-shared" / "review-queue"
     n_pending = len(list(review_q.glob("*.json"))) if review_q.exists() else 0
     if n_pending >= MAX_REVIEW_BACKLOG:
         log("dev", f"backpressure: review-queue {n_pending} ≥ {MAX_REVIEW_BACKLOG}, idle")
         return False
 
+    # Step 3: create fresh task from rotation.
     cursor = load_cursor()
     project = ROTATION[cursor["rotation_idx"] % len(ROTATION)]
     focus = FOCUS_CYCLE[cursor["focus_idx"] % len(FOCUS_CYCLE)]
