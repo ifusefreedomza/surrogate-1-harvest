@@ -54,8 +54,13 @@ SYSTEM_PROMPT = (
 )
 
 
+_provider_cooldown: dict[str, float] = {}  # name → unix_ts when next eligible
+
+
 def call_llm(messages: list, max_tokens: int = 1500, timeout: int = 30) -> str:
-    chains = [
+    import time as _time
+    now_ts = _time.time()
+    chains_all = [
         ("Groq", "https://api.groq.com/openai/v1/chat/completions",
          os.environ.get("GROQ_API_KEY"), "llama-3.3-70b-versatile"),
         ("Cerebras", "https://api.cerebras.ai/v1/chat/completions",
@@ -79,6 +84,11 @@ def call_llm(messages: list, max_tokens: int = 1500, timeout: int = 30) -> str:
         ("GitHub-Models", "https://models.inference.ai.azure.com/chat/completions",
          os.environ.get("GITHUB_MODELS_TOKEN"), "gpt-4o-mini"),
     ]
+    # Skip providers cooling down from recent 429s
+    chains = [c for c in chains_all if _provider_cooldown.get(c[0], 0) <= now_ts]
+    if not chains:
+        # all in cooldown — try the one closest to ready
+        chains = [min(chains_all, key=lambda c: _provider_cooldown.get(c[0], 0))]
     last_err = None
     for name, url, key, model in chains:
         if not key: continue
@@ -94,8 +104,13 @@ def call_llm(messages: list, max_tokens: int = 1500, timeout: int = 30) -> str:
                 d = json.loads(r.read())
             log.info(f"LLM ok via {name}/{model}")
             return d["choices"][0]["message"]["content"]
-        except (urllib.error.HTTPError, urllib.error.URLError, KeyError,
-                TimeoutError, json.JSONDecodeError) as e:
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                _provider_cooldown[name] = now_ts + 60
+            last_err = f"{name}: HTTP {e.code}"
+            continue
+        except (urllib.error.URLError, KeyError, TimeoutError,
+                json.JSONDecodeError) as e:
             last_err = f"{name}: {e}"
             continue
 
