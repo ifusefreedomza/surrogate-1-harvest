@@ -492,18 +492,40 @@ SOURCES = (
 )
 
 
+SEEN_TTL_SEC = int(os.environ.get("RESEARCH_SEEN_TTL_SEC", "604800"))   # 7 days
+SEEN_CAP = int(os.environ.get("RESEARCH_SEEN_CAP", "1500"))             # was 5000
+
+
 def load_cursor() -> dict:
     if CURSOR_FILE.exists():
-        try: return json.loads(CURSOR_FILE.read_text())
-        except: pass
-    # Stagger workers so 3 instances cover 3 different sources at the same time
+        try:
+            c = json.loads(CURSOR_FILE.read_text())
+            # Migration: legacy format had seen=list[fingerprint]. New
+            # format = list[{fp, ts}]. Auto-upgrade legacy entries with
+            # ts=now (so they all expire together at +TTL — preferable to
+            # losing them outright).
+            seen = c.get("seen", [])
+            if seen and isinstance(seen[0], str):
+                now_ts = int(time.time())
+                c["seen"] = [{"fp": fp, "ts": now_ts} for fp in seen]
+            return c
+        except Exception:
+            pass
     return {"src_idx": (int(WORKER_ID) - 1) % len(SOURCES), "seen": []}
 
 
 def save_cursor(c: dict) -> None:
     CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Cap seen-list to last 5000 to stop unbounded growth
-    c["seen"] = c.get("seen", [])[-5000:]
+    # TTL prune: drop fingerprints older than SEEN_TTL_SEC. This lets posts
+    # we saw N days ago resurface — useful when pain pattern recurs (often
+    # the same post gets re-asked across many users) and PREVENTS the
+    # cursor from saturating to the point where every fetch is fully
+    # deduped (observed 2026-05-02: every research cycle returned
+    # new_seen=0 because seen-list had absorbed thousands of posts).
+    cutoff = int(time.time()) - SEEN_TTL_SEC
+    pruned = [s for s in c.get("seen", [])
+              if isinstance(s, dict) and s.get("ts", 0) >= cutoff]
+    c["seen"] = pruned[-SEEN_CAP:]
     CURSOR_FILE.write_text(json.dumps(c, indent=2))
 
 
@@ -515,7 +537,10 @@ def post_fingerprint(post: dict) -> str:
 
 def do_one_cycle() -> bool:
     c = load_cursor()
-    seen = set(c.get("seen", []))
+    # seen now stored as [{fp, ts}, ...] — extract fingerprints for the
+    # in-memory dedup set during the cycle. New entries appended later
+    # carry the current timestamp.
+    seen = set(s["fp"] for s in c.get("seen", []) if isinstance(s, dict))
     fired = 0
 
     for _ in range(SOURCES_PER_CYCLE):
@@ -618,7 +643,18 @@ def do_one_cycle() -> bool:
             f"rejected={n_rejected} low_sev={n_low_sev} dedup={n_dedupe} "
             f"→ fired_so_far={fired} (→ validator-queue)")
 
-    c["seen"] = list(seen)
+    # Merge new fingerprints with existing TS-tagged entries. Old entries
+    # keep their original timestamp; new fingerprints (those NOT already
+    # in old seen) get the current timestamp so TTL kicks in correctly.
+    now_ts = int(time.time())
+    old_by_fp = {s["fp"]: s for s in c.get("seen", []) if isinstance(s, dict)}
+    merged = []
+    for fp in seen:
+        if fp in old_by_fp:
+            merged.append(old_by_fp[fp])
+        else:
+            merged.append({"fp": fp, "ts": now_ts})
+    c["seen"] = merged
     save_cursor(c)
     log(f"research-{WORKER_ID}", f"cycle done — {fired} new pain items pushed → bd-queue")
     return fired > 0
