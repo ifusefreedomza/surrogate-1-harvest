@@ -268,9 +268,12 @@ async def check_pending_polls():
     rows = _sb_request("GET", "customer_polls?status=eq.pending&order=created_at.asc&limit=5")
     if not rows:
         return
-    channel = client.get_channel(POLL_CHANNEL_ID)
-    if channel is None:
-        log.warning(f"poll channel {POLL_CHANNEL_ID} not found")
+    # fetch_channel hits the API instead of cache; works even when the
+    # channel was never cached (e.g. only sent to once, or DM channel)
+    try:
+        channel = await client.fetch_channel(POLL_CHANNEL_ID)
+    except Exception as _ce:
+        log.warning(f"poll channel {POLL_CHANNEL_ID} not fetchable: {_ce}")
         return
     for poll in rows:
         try:
