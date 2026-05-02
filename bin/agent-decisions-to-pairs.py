@@ -38,6 +38,10 @@ import os
 import sys
 from pathlib import Path
 
+# bin/lib is a sibling — make it importable regardless of CWD
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.pii_scrub import scrub_record  # noqa: E402
+
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", "/opt/surrogate-1-harvest"))
 SHARED = REPO_ROOT / "state" / "swarm-shared"
 # Local-to-repo file (audit trail + retry safety)
@@ -222,6 +226,9 @@ def main() -> int:
                 # Don't mark as seen yet — incomplete items may produce records later
                 continue
             for rec in recs:
+                # PII scrub before fingerprint so deduping reflects the
+                # cleaned content (matches what we actually publish).
+                rec = scrub_record(rec)
                 rec["fp"] = fingerprint(rec)
                 rec["captured_at"] = datetime.datetime.utcnow().isoformat() + "Z"
                 append_jsonl(PAIRS_FILE, rec)
