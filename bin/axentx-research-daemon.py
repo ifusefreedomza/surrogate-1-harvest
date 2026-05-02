@@ -40,7 +40,12 @@ DEDUP_SIM_THRESHOLD = float(os.environ.get("RESEARCH_DEDUP_THRESHOLD", "0.85"))
 RESEARCH_BUDGET = get_role_budget("research", 400)
 
 WORKER_ID = os.environ.get("RESEARCH_WORKER_ID", "1")
-POLL_SEC = int(os.environ.get("RESEARCH_POLL_SEC", "600"))  # 10 min/cycle
+# 30s = effectively continuous (was 600s = "cron-y"). Each cycle still hits
+# SOURCES_PER_CYCLE distinct subreddits/HN/devto/IH. With 3 workers x 30s
+# per cycle x 3 sources/cycle, fleet covers ~1080 source-hits/h vs the
+# old 18/h. Coverage of all 14 subreddits cycles every ~5 min instead of
+# every 8h. (User directive 2026-05-02 round 3: 'ไม่ควรมีการทำเป็น cron'.)
+POLL_SEC = int(os.environ.get("RESEARCH_POLL_SEC", "30"))
 SOURCES_PER_CYCLE = int(os.environ.get("RESEARCH_SOURCES_PER_CYCLE", "3"))
 
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

@@ -12,7 +12,10 @@ import datetime, json, os, sys, subprocess
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from axentx_pipeline import (REPO_ROOT, log, call_llm, daemon_loop, new_item, write_item)
-POLL_SEC = int(os.environ.get("CONTENT_POLL_SEC", "14400"))  # 4h
+# 5 min poll — was 4h. Continuous content-from-commits drafting; the inner
+# do_one_cycle() already filters to "last N hours of commits" so over-firing
+# is cheap (returns False, no LLM call). User directive 2026-05-02 round 3.
+POLL_SEC = int(os.environ.get("CONTENT_POLL_SEC", "300"))
 PROJECTS_ROOT = Path(os.environ.get("AXENTX_ROOT", "/opt/axentx"))
 PROJECTS = ["Costinel", "vanguard", "airship", "workio", "surrogate-1"]
 # axiomops dropped 2026-05-02 — merged into airship

@@ -16,7 +16,10 @@ import datetime, hashlib, json, os, sys, urllib.request, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from axentx_pipeline import (REPO_ROOT, log, call_llm, write_item, daemon_loop)
-POLL_SEC = int(os.environ.get("TRENDS_POLL_SEC", "21600"))  # 6 hours
+# 5 min poll — was 6h. Trending RSS / GH-stargazer pulls are cheap and the
+# source services rate-limit us anyway. Faster cycle = faster market-signal
+# feed-through. User directive 2026-05-02 round 3.
+POLL_SEC = int(os.environ.get("TRENDS_POLL_SEC", "300"))
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 CURSOR_FILE = REPO_ROOT / "state" / ".trends-cursor.json"
