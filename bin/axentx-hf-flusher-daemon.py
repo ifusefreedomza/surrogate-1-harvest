@@ -90,20 +90,36 @@ def fetch_pending(limit: int) -> list[dict]:
 
 
 def mark_pushed(ids: list[int]) -> None:
+    """Delete pushed rows in chunks (cleaner than marking, avoids D1 IN()
+    placeholder limit + lets the table self-prune)."""
     if not ids:
         return
-    placeholders = ",".join("?" for _ in ids)
-    _d1_query(
-        f"UPDATE harvested_pains SET pushed_to_hf = 1 WHERE id IN ({placeholders})",
-        ids,
-    )
+    # Chunks of 50 ids per statement to stay well under D1 limits.
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        placeholders = ",".join("?" for _ in chunk)
+        r = _d1_query(
+            f"DELETE FROM harvested_pains WHERE id IN ({placeholders})",
+            [int(x) for x in chunk],
+        )
+        if not r:
+            log("hf-flusher", f"  ⚠ mark_pushed chunk {i//50} failed — will reflush next cycle (idempotent: same content)")
 
 
 def push_to_hf(rows: list[dict]) -> bool:
-    """Push a batch as JSONL to HF Datasets repo."""
+    """Push a batch as JSONL to HF Datasets via huggingface_hub.
+
+    Use the official lib instead of hand-rolled multipart — way fewer
+    failure modes (preupload/commit dance, content-disposition headers,
+    LFS pointer creation, ...).
+    """
     if not HF_TOKEN or not rows:
         return False
-    # Build NDJSON
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        log("hf-flusher", "  ⚠ huggingface_hub not installed; pip install in venv")
+        return False
     ndjson = "\n".join(json.dumps({
         "source": r.get("source", ""),
         "url": r.get("url", ""),
@@ -112,30 +128,21 @@ def push_to_hf(rows: list[dict]) -> bool:
         "score": r.get("score", 0),
         "harvested_at": r.get("harvested_at", 0),
     }, ensure_ascii=False) for r in rows) + "\n"
-    # Filename per batch (HF Datasets just needs unique paths)
     ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     fname = f"data/{ts}-{len(rows):04d}.jsonl"
-    upload_url = (f"https://huggingface.co/api/datasets/{HF_DATASET}/upload/main/"
-                  f"{fname}")
-    req = urllib.request.Request(
-        upload_url, data=ndjson.encode(), method="POST",
-        headers={
-            "Authorization": f"Bearer {HF_TOKEN}",
-            "Content-Type": "application/x-ndjson",
-            "User-Agent": UA,
-        },
-    )
+    api = HfApi(token=HF_TOKEN)
     try:
-        with urllib.request.urlopen(req, timeout=45) as r:
-            ok = 200 <= r.status < 300
-        if ok:
-            log("hf-flusher", f"  ✓ pushed {len(rows)} rows → {fname}")
-        return ok
-    except urllib.error.HTTPError as e:
-        log("hf-flusher", f"  ✗ HF push fail: HTTP {e.code} — will retry next cycle")
-        return False
+        api.upload_file(
+            path_or_fileobj=ndjson.encode("utf-8"),
+            path_in_repo=fname,
+            repo_id=HF_DATASET,
+            repo_type="dataset",
+            commit_message=f"flush: +{len(rows)} pains @ {ts}",
+        )
+        log("hf-flusher", f"  ✓ pushed {len(rows)} rows → {fname}")
+        return True
     except Exception as e:
-        log("hf-flusher", f"  ✗ HF push exception: {type(e).__name__}: {str(e)[:120]}")
+        log("hf-flusher", f"  ✗ HF push fail: {type(e).__name__}: {str(e)[:160]}")
         return False
 
 
