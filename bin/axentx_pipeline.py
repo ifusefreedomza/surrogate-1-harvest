@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -55,11 +56,40 @@ for q in QUEUES.values():
     q.mkdir(parents=True, exist_ok=True)
 
 
-def log(role: str, msg: str) -> None:
-    line = f"[{datetime.datetime.utcnow().isoformat()}Z] [{role}] {msg}"
-    print(line, flush=True)
+def log(role: str, msg: str, **kv) -> None:
+    """Dual-emit: human-readable line + structured JSON line on the SAME log
+    file. Downstream tooling (jq, vector, loki) parses JSON; humans read the
+    text. Optional keyword args (trace_id, item_id, ...) get embedded in the
+    JSON form only — keeps the human line clean.
+    """
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    text_line = f"[{ts}] [{role}] {msg}"
+    json_line = json.dumps({
+        "ts": ts, "role": role, "level": kv.pop("level", "info"),
+        "message": msg, **kv,
+    }, ensure_ascii=False)
+    print(text_line, flush=True)
     with (LOG_DIR / f"axentx-{role}-daemon.log").open("a") as f:
-        f.write(line + "\n")
+        f.write(text_line + "\n")
+        f.write(json_line + "\n")
+
+
+def jlog(role: str, **kv) -> None:
+    """Structured-only emitter for callers who want pure JSON (no text twin).
+    Convenient in hot paths where we don't want to compose a message string.
+    """
+    msg = kv.pop("message", kv.pop("msg", ""))
+    log(role, msg, **kv)
+
+
+def new_trace_id() -> str:
+    return uuid.uuid4().hex
+
+
+def get_role_budget(role: str, default: int) -> int:
+    """Per-role token budget knob. Env BUDGET_<ROLE> overrides default.
+    Roles: RESEARCH, BD, DESIGN, BUSINESS, MARKETING, PRD, DEV, REVIEWER, QA."""
+    return int(os.environ.get(f"BUDGET_{role.upper()}", str(default)))
 
 
 UA_BROWSER = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -108,10 +138,50 @@ def _call_gemini(prompt: str, system: str = "", max_tokens: int = 1500,
     return d["candidates"][0]["content"]["parts"][0]["text"]
 
 
+SHORT_PROMPT_THRESHOLD = int(os.environ.get("SHORT_PROMPT_THRESHOLD", "500"))
+
+
+def _call_cf_workers_ai(messages: list, max_tokens: int, timeout: int,
+                       model: str = "@cf/meta/llama-3.1-8b-instruct") -> str:
+    """Direct call to Cloudflare Workers AI (fast + cheap, ~free tier).
+    Used as the preferred head of chain for short prompts."""
+    cf_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    cf_acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not cf_token or not cf_acct:
+        raise RuntimeError("CF Workers AI: missing token/account")
+    req = urllib.request.Request(
+        f"https://api.cloudflare.com/client/v4/accounts/{cf_acct}/ai/run/{model}",
+        data=json.dumps({"messages": messages, "max_tokens": max_tokens}).encode(),
+        headers={"Authorization": f"Bearer {cf_token}",
+                 "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read())
+    if not d.get("success"):
+        raise RuntimeError(f"CF Workers AI: {d.get('errors')}")
+    return d["result"]["response"]
+
+
 def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
              timeout: int = 30) -> str:
     """11-provider fallback chain — burns through providers until one works.
-    Order optimized: best-quality / fastest / largest free quota first."""
+    Order optimized: best-quality / fastest / largest free quota first.
+    For SHORT prompts (<SHORT_PROMPT_THRESHOLD chars) we prepend Cloudflare
+    Workers AI Llama-3.1-8B because it's fast/cheap and adequate for triage-
+    sized work; long prompts skip it and go straight to the quality chain."""
+    # Prepare messages once — used for both fast-path and main chain.
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system[:4000]})
+    messages.append({"role": "user", "content": prompt[:8000]})
+
+    # Fast path: short prompts get Workers AI first.
+    if len(prompt) < SHORT_PROMPT_THRESHOLD:
+        try:
+            return _call_cf_workers_ai(messages, max_tokens, timeout)
+        except Exception:
+            pass  # fall through to full chain
+
     # OpenAI-compatible providers (Chat Completions API shape)
     chains = [
         ("Groq", "https://api.groq.com/openai/v1/chat/completions",
@@ -137,10 +207,6 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1500,
         ("GitHub-Models", "https://models.inference.ai.azure.com/chat/completions",
          os.environ.get("GITHUB_MODELS_TOKEN"), "gpt-4o-mini"),
     ]
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system[:4000]})
-    messages.append({"role": "user", "content": prompt[:8000]})
     payload = {"messages": messages, "max_tokens": max_tokens, "temperature": 0.3}
     last_err = None
     for name, url, key, model in chains:
@@ -283,6 +349,42 @@ def rag_query(question: str, top_k: int = 5, kind: str | None = None) -> str:
     except Exception:
         return ""
 
+def rag_top_score(question: str, kind: str | None = None) -> float:
+    """Return the top-1 cosine score from Vectorize for `question`.
+    Returns 0.0 on any failure / empty index — callers treat 0.0 as
+    'no comparable past item, safe to proceed'. Used for dedup gates."""
+    import json as _j, urllib.request as _u
+    tok = os.environ.get("CLOUDFLARE_API_TOKEN")
+    acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not tok or not acct:
+        return 0.0
+    try:
+        emb_req = _u.Request(
+            f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/@cf/baai/bge-base-en-v1.5",
+            data=_j.dumps({"text": [question[:500]]}).encode(),
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+        )
+        with _u.urlopen(emb_req, timeout=15) as r:
+            emb = _j.loads(r.read())
+        if not emb.get("success"): return 0.0
+        qvec = emb["result"]["data"][0]
+        q_body = {"vector": qvec, "topK": 1, "returnMetadata": "all", "returnValues": False}
+        if kind: q_body["filter"] = {"kind": kind}
+        q_req = _u.Request(
+            f"https://api.cloudflare.com/client/v4/accounts/{acct}/vectorize/v2/indexes/surrogate-1-rag/query",
+            data=_j.dumps(q_body).encode(),
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+        )
+        with _u.urlopen(q_req, timeout=15) as r:
+            q = _j.loads(r.read())
+        if not q.get("success"): return 0.0
+        matches = q["result"]["matches"]
+        if not matches: return 0.0
+        return float(matches[0].get("score") or 0.0)
+    except Exception:
+        return 0.0
+
+
 def new_item(project: str, focus: str, prompt: str) -> dict:
     ts = datetime.datetime.utcnow()
     sid = hashlib.sha1(f"{ts.isoformat()}-{project}-{focus}".encode()).hexdigest()[:8]
@@ -292,6 +394,7 @@ def new_item(project: str, focus: str, prompt: str) -> dict:
         "focus": focus,
         "stage": "dev",
         "created_at": ts.isoformat() + "Z",
+        "trace_id": new_trace_id(),
         "history": [],
         "current": {"text": prompt},
     }
@@ -319,7 +422,10 @@ def pick_oldest(stage: str) -> tuple[Path, dict] | None:
 
 def advance(item: dict, src_path: Path, next_stage: str,
             actor: str, output: str) -> Path:
-    """Move item from current stage to next, append history entry."""
+    """Move item from current stage to next, append history entry.
+    Preserves trace_id + discovery_id once set (never overwrites)."""
+    if not item.get("trace_id"):
+        item["trace_id"] = new_trace_id()
     item["history"].append({
         "stage": item.get("stage"),
         "actor": actor,
@@ -343,6 +449,28 @@ def fail(item: dict, src_path: Path, actor: str, err: str) -> None:
     write_item(item, "done")
 
 
+# Stage SLOs (seconds) — if a single do_one cycle exceeds this, we log a warn.
+# Keys are the role name daemon_loop is launched with. Tune as cost/quality changes.
+STAGE_SLO_SEC = {
+    "research": 60,
+    "bd": 45,
+    "design": 50,
+    "business": 50,
+    "marketing": 60,
+    "prd": 90,
+    "dev": 60,
+    "reviewer": 45,
+    "qa": 30,
+    "commit": 20,
+}
+
+# Hibernation: after this many consecutive idle cycles with no work, sleep
+# for HIBERNATE_MULT × poll_sec to ease CPU on a quiet pipeline. Reset on
+# any cycle that did work.
+HIBERNATE_AFTER = int(os.environ.get("HIBERNATE_AFTER", "12"))
+HIBERNATE_MULT = int(os.environ.get("HIBERNATE_MULT", "5"))
+
+
 def daemon_loop(role: str, poll_sec: int, work_fn) -> None:
     """Generic daemon main — never returns. Polls input queue, runs work_fn.
     OOM-hardened: explicit gc + RSS check + bail-out before kill."""
@@ -357,15 +485,26 @@ def daemon_loop(role: str, poll_sec: int, work_fn) -> None:
 
     # MemoryMax in systemd is 64M; we self-restart at 48M to avoid hard kill
     SOFT_RSS_KB = int(os.environ.get("DAEMON_SOFT_RSS_KB", "49152"))  # 48 MB
-    log(role, f"start — poll every {poll_sec}s, RSS soft cap {SOFT_RSS_KB} KB")
+    # Match SLO on the role's primary key (e.g. "research-1" → "research")
+    slo_key = role.split("-", 1)[0]
+    slo_sec = STAGE_SLO_SEC.get(slo_key)
+    log(role, f"start — poll every {poll_sec}s, RSS soft cap {SOFT_RSS_KB} KB"
+              f"{f', SLO {slo_sec}s' if slo_sec else ''}")
     n_processed = 0
     n_idle = 0
     while True:
+        t0 = time.monotonic()
         try:
             did_work = work_fn()
         except Exception as e:
             log(role, f"⚠ exception: {type(e).__name__}: {e}")
             did_work = False
+        elapsed = time.monotonic() - t0
+
+        # SLO breach warning — only when work happened (idle cycle is fast/short)
+        if did_work and slo_sec and elapsed > slo_sec:
+            log(role, f"⚠ SLO breach: cycle took {elapsed:.1f}s > {slo_sec}s",
+                level="warn", elapsed=round(elapsed, 1), slo=slo_sec)
 
         # Explicit GC after every cycle — Python releases memory only when
         # threshold hit; we want it to release immediately after LLM blob.
@@ -386,4 +525,6 @@ def daemon_loop(role: str, poll_sec: int, work_fn) -> None:
             n_idle += 1
             if n_idle % 20 == 1:
                 log(role, f"idle (processed={n_processed} cycles, RSS={rss_kb} KB)")
-            time.sleep(poll_sec)
+            # Hibernate when persistently idle — saves CPU on a quiet pipeline.
+            sleep_sec = poll_sec * HIBERNATE_MULT if n_idle >= HIBERNATE_AFTER else poll_sec
+            time.sleep(sleep_sec)
