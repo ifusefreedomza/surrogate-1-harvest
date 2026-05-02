@@ -109,7 +109,15 @@ def _flush_loop() -> None:
             agent = _state["agent"]
             snap = dict(_state)
         if agent:
-            _post_heartbeat(snap)
+            # Prefix agent name with host so multi-VM fleets don't collide
+            # in the D1 agent_status table (key is `agent` alone). After
+            # 2026-05-02 Kamatera launch, GCP and Kam daemons shared role
+            # names ('dev-1', 'bd', ...) and overwrote each other —
+            # dashboard reported only one. Keying as '<host>/<role>' fans
+            # them out across hosts.
+            snap_send = dict(snap)
+            snap_send["agent"] = f"{HOSTNAME}/{agent}"
+            _post_heartbeat(snap_send)
         # Sleep in small slices so SIGTERM exits cleanly within ~1s
         for _ in range(HEARTBEAT_SEC):
             if _stop_evt.is_set():
@@ -136,5 +144,7 @@ def stop_heartbeat() -> None:
         snap = dict(_state)
         agent = _state["agent"]
     if agent:
-        _post_heartbeat(snap)
+        snap_send = dict(snap)
+        snap_send["agent"] = f"{HOSTNAME}/{agent}"
+        _post_heartbeat(snap_send)
     _stop_evt.set()
